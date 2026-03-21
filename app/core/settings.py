@@ -4,9 +4,12 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     groq_api_key: str
     langsmith_api_key: str
+    huggingface_api_key: str = ""
     langsmith_project: str = "arxiv-lens"
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
     qdrant_collection_name: str = "arxiv_papers"
     bge_model_name: str = "BAAI/bge-m3"
     bge_reranker_name: str = "BAAI/bge-reranker-v2-m3"
