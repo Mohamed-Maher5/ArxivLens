@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+
 class Paper(BaseModel):
     paper_id: str
     title: str
@@ -10,6 +11,7 @@ class Paper(BaseModel):
     published: str
     pdf_path: Optional[str] = None
     processed: bool = False
+
 
 class Chunk(BaseModel):
     chunk_id: str
@@ -20,6 +22,8 @@ class Chunk(BaseModel):
     chunk_type: str
     page_number: Optional[int] = None
     figure_description: Optional[str] = None
+    caption: Optional[str] = None
+
 
 class QueryResult(BaseModel):
     question: str
@@ -29,6 +33,7 @@ class QueryResult(BaseModel):
     contextualized_query: str
     timestamp: datetime = Field(default_factory=datetime.now)
 
+
 class EvalResult(BaseModel):
     question: str
     answer: str
@@ -36,6 +41,7 @@ class EvalResult(BaseModel):
     answer_relevancy: Optional[float] = None
     context_precision: Optional[float] = None
     context_recall: Optional[float] = None
+
 
 class Message(BaseModel):
     role: str
