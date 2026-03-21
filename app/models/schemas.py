@@ -8,6 +8,7 @@ class Paper(BaseModel):
     title: str
     authors: list[str]
     abstract: str
+    summary: Optional[str] = None
     published: str
     pdf_path: Optional[str] = None
     processed: bool = False

@@ -1,4 +1,5 @@
 import arxiv
+import requests
 from pathlib import Path
 from app.core.logger import logger
 from app.core.exceptions import ArxivFetchError
@@ -32,6 +33,7 @@ class ArxivFetcher:
                     abstract=result.summary,
                     published=str(result.published.date())
                 )
+                paper.summary = self.summarize_abstract(result.summary)
                 papers.append(paper)
                 logger.info(f"Found: {paper.title[:60]}...")
             logger.info(f"Total papers found: {len(papers)}")
@@ -67,7 +69,35 @@ class ArxivFetcher:
                 abstract=result.summary,
                 published=str(result.published.date())
             )
+            paper.summary = self.summarize_abstract(result.summary)
             logger.info(f"Fetched: {paper.title[:60]}...")
             return paper
         except Exception as e:
             raise ArxivFetchError(f"Fetch by ID failed for {paper_id}: {e}")
+
+    def summarize_abstract(self, abstract: str) -> str:
+        try:
+            response = requests.post(
+                f"{settings.ollama_url}/api/generate",
+                json={
+                    "model": settings.ollama_summarizer_model,
+                    "prompt": f"""Summarize this abstract in one line of 10 words as a maximum for you :
+
+                    {abstract}""",
+                    "stream": False
+                    },
+                    timeout=60
+                )
+            if response.status_code == 200:
+                summary = response.json()["response"].strip()
+                logger.info("Abstract summarized successfully")
+                return summary
+            else:
+                logger.warning(f"Ollama error: {response.status_code} — {response.text}")
+                return abstract
+        except requests.exceptions.Timeout:
+            logger.warning("Ollama timeout — using raw abstract")
+            return abstract
+        except Exception as e:
+            logger.warning(f"Ollama unavailable: {e} — using raw abstract")
+            return abstract
