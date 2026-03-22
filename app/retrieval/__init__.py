@@ -1,5 +1,4 @@
 from app.retrieval.hybrid_retriever import HybridRetriever
-from app.retrieval.reranker import Reranker
 from app.retrieval.cache import Cache
 from app.core.logger import logger
 from app.core.exceptions import RetrievalError
@@ -14,11 +13,9 @@ def retrieve(query: str) -> list[dict]:
         return cached
     try:
         retriever = HybridRetriever()
-        reranker = Reranker()
         chunks = retriever.retrieve(query)
-        reranked = reranker.rerank(query, chunks)
-        _cache.set(query, reranked)
-        return reranked
+        _cache.set(query, chunks)
+        return chunks
     except RetrievalError:
         raise
     except Exception as e:

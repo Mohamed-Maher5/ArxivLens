@@ -16,12 +16,12 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.3-70b-versatile"
     vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     ollama_url: str = "http://localhost:11434"
-    ollama_summarizer_model: str = "phi3"
+    ollama_summarizer_model: str = "llama3.2:3b"
     chunk_size: int = 512
     chunk_overlap: int = 50
-    top_k_retrieval: int = 10
-    top_k_rerank: int = 5
-    max_history: int = 6
+    top_k_retrieval: int = 5
+    top_k_rerank: int = 3
+    max_history: int = 5
 
     class Config:
         env_file = ".env"

@@ -12,7 +12,7 @@ class Reranker:
         logger.info("Reranker initialized")
 
     def rerank(self, query: str, chunks: list[dict]) -> list[dict]:
-        logger.info(f"Reranking {len(chunks)} chunks")
+        logger.info(f"Reranking {len(chunks)} chunks to top {self.top_k}")
         try:
             if not chunks:
                 return []
@@ -34,16 +34,17 @@ class Reranker:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"""Score the relevance of this chunk to the query on a scale of 0-10.
+                        "content": f"""Score relevance of this chunk to the query.
                         Query: {query}
-                        Chunk: {content[:500]}
-                        Respond with only a number between 0 and 10."""
+                        Chunk: {content[:300]}
+                        Respond with only a number 0-10:"""
                     }
                 ],
                 max_tokens=5,
                 temperature=0
             )
             score_text = response.choices[0].message.content.strip()
-            return float(score_text)
+            score = float(''.join(c for c in score_text if c.isdigit() or c == '.'))
+            return min(10.0, max(0.0, score))
         except Exception:
             return 0.0
