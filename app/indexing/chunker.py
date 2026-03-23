@@ -4,7 +4,7 @@ from app.core.logger import logger
 from app.core.exceptions import ChunkingError
 from app.core.settings import settings
 from app.models.schemas import Chunk
-
+from typing import Optional
 
 class Chunker:
 
@@ -48,9 +48,13 @@ class Chunker:
                 ))
 
             if parsed_result.get("references"):
+                # Pass the page where references section starts
+                # Falls back to None if not detected (old parsed files)
+                references_page = parsed_result.get("references_page")
                 chunks.append(self._make_references_chunk(
                     parsed_result["references"],
-                    paper_id, title, authors
+                    paper_id, title, authors,
+                    references_page
                 ))
 
             logger.info(f"Created {len(chunks)} chunks for {paper_id}")
@@ -121,12 +125,19 @@ class Chunker:
         )
 
     def _make_references_chunk(self, references: str, paper_id: str,
-                                title: str, authors: list) -> Chunk:
+                                title: str, authors: list,
+                                page_number: Optional[int] = None) -> Chunk:
+        """
+        Create a references chunk with the page number where the
+        references section starts in the PDF.
+        page_number will be None only for papers parsed before this fix.
+        """
         return Chunk(
             chunk_id=str(uuid.uuid4()),
             paper_id=paper_id,
             paper_title=title,
             authors=authors,
             content=references,
-            chunk_type="references"
+            chunk_type="references",
+            page_number=page_number   # ← now correctly set
         )

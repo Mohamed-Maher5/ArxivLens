@@ -31,7 +31,8 @@ class PDFParser:
                 "pages": [],
                 "images": [],
                 "tables": [],
-                "references": None
+                "references": None,
+                "references_page": None,   # ← NEW: page where references section starts
             }
             self._references_start_line = 0
             in_references = False
@@ -42,6 +43,9 @@ class PDFParser:
 
                 if not in_references and self._is_references_section(text, page_num):
                     in_references = True
+
+                    # Store the page number where references start
+                    result["references_page"] = page_num
 
                     content_part = "\n".join(
                         lines[:self._references_start_line]
@@ -84,7 +88,7 @@ class PDFParser:
                 f"{len(result['pages'])} pages, "
                 f"{len(result['images'])} images, "
                 f"{len(result['tables'])} tables, "
-                f"references: {'yes' if result['references'] else 'no'}"
+                f"references: {'yes (page ' + str(result['references_page']) + ')' if result['references'] else 'no'}"
             )
             return result
 

@@ -1,12 +1,9 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    SearchRequest,
-    NamedVector,
-    NamedSparseVector,
-    SparseVector,
     FusionQuery,
     Fusion,
-    Prefetch
+    Prefetch,
+    SparseVector,
 )
 from app.core.logger import logger
 from app.core.exceptions import RetrievalError
@@ -34,11 +31,25 @@ class HybridRetriever:
         logger.info("HybridRetriever initialized")
 
     def retrieve(self, query: str) -> list[dict]:
-        logger.info(f"Retrieving for query: {query[:50]}...")
+        """
+        Hybrid search — dense (BGE-M3) + sparse (BM25) fused via RRF.
+        Returns top_k chunks with scores. Each chunk dict has a 'score' key.
+
+        Dense search finds semantically similar chunks.
+        Sparse search finds keyword-matching chunks.
+        RRF fusion combines both for best recall.
+
+        Full debug logging shows all retrieved chunks and their scores.
+
+        Normal vector search (dense only) is kept below as fallback comment.
+        """
+        logger.info(f"[RETRIEVE] Hybrid search for: {query[:60]}...")
         try:
             query_vectors = self.embedder.embed_query(query)
             dense = query_vectors["dense_vector"]
             sparse = query_vectors["sparse_vector"]
+
+            # ── Hybrid search (dense + sparse via RRF) ─────────────────────
             results = self.client.query_points(
                 collection_name=self.collection,
                 prefetch=[
@@ -57,12 +68,44 @@ class HybridRetriever:
                     )
                 ],
                 query=FusionQuery(fusion=Fusion.RRF),
-                limit=self.top_k
+                limit=self.top_k,
+                with_payload=True,
+                with_vectors=False,
             )
+
             chunks = []
             for point in results.points:
-                chunks.append(point.payload)
-            logger.info(f"Retrieved {len(chunks)} chunks")
+                payload = point.payload.copy()
+                payload["score"] = round(float(point.score), 4)
+                chunks.append(payload)
+
+            # ── Normal vector search (dense only) — commented out ──────────
+            # results = self.client.query_points(
+            #     collection_name=self.collection,
+            #     query=dense,
+            #     using=DENSE_VECTOR_NAME,
+            #     limit=self.top_k,
+            #     with_payload=True,
+            #     with_vectors=False,
+            # )
+            # chunks = []
+            # for point in results.points:
+            #     payload = point.payload.copy()
+            #     payload["score"] = round(float(point.score), 4)
+            #     chunks.append(payload)
+            # ──────────────────────────────────────────────────────────────
+
+            # Debug: log all retrieved chunks with scores
+            logger.info(f"[RETRIEVE] Got {len(chunks)} chunks via hybrid search (RRF)")
+            for i, chunk in enumerate(chunks, 1):
+                logger.info(
+                    f"[RETRIEVE] Chunk {i:02d} | score={chunk.get('score',0):.4f} | "
+                    f"type={chunk.get('chunk_type','?'):12s} | "
+                    f"page={str(chunk.get('page_number','?')):4s} | "
+                    f"preview={chunk.get('content','')[:60].replace(chr(10),' ')}..."
+                )
+
             return chunks
+
         except Exception as e:
             raise RetrievalError(f"Retrieval failed: {e}")

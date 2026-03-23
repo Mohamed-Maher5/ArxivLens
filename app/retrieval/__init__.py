@@ -8,6 +8,14 @@ _cache = Cache()
 
 
 def retrieve(query: str) -> list[dict]:
+    """
+    Retrieve chunks for a query using normal vector search.
+    Returns list of chunk dicts, each containing a 'score' key
+    (cosine similarity, 0.0 – 1.0) alongside the chunk payload.
+
+    Results are cached by query hash to avoid duplicate API calls
+    within the same session.
+    """
     cached = _cache.get(query)
     if cached:
         return cached

@@ -1,135 +1,95 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 
+# ── Intent classification ──────────────────────────────────────────────────────
+INTENT_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are an intent classifier for an academic paper QA system.
+Classify the user message as either CHAT or TASK.
+Output ONLY one word — either CHAT or TASK.
+
+- CHAT → casual conversation, greetings, small talk, opinions, feelings
+- TASK → questions about a paper, research, science, methodology, results, authors
+
+Examples:
+"hi how are you" → CHAT
+"who are the authors?" → TASK
+"what are the limitations?" → TASK
+"thanks!" → CHAT
+"what is machine learning?" → TASK"""),
+    ("human", "{message}")
+])
+
+
+# ── Contextualization (phi3 via Ollama) ───────────────────────────────────────
 CONTEXTUALIZATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a query contextualizer for academic research.
 Given conversation history and a new question, rewrite the question
 to be completely self-contained and specific.
 If the question already makes sense alone return it unchanged.
-Return ONLY the rewritten question — no explanation.
-
-Example:
-History: User asked about transformer architecture
-Question: What are its limitations?
-Rewritten: What are the limitations of transformer architecture?"""),
-    ("human", """Conversation history:
+Return ONLY the rewritten question — no explanation."""),
+    ("human", """History:
 {history}
 
-New question: {question}
+Question: {question}
 
 Rewritten question:""")
 ])
 
 
-COVERAGE_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a retrieval coverage classifier.
-
-Your task:
-Decide whether the retrieved CONTEXT contains information that is relevant to answering the QUESTION.
-
-Output ONLY one word:
-- COVERED
-- NOT_COVERED
-
-Definitions:
-- COVERED → The context contains information related to the question topic, even partially.
-  This includes:
-  - Definitions, explanations, or components of the topic
-  - Related concepts that could help answer the question
-  - Indirect or incomplete information
-
-- NOT_COVERED → The context is unrelated to the question topic.
-
-Important rules:
-- Be LENIENT: if there is ANY reasonable topical overlap → COVERED
-- Do NOT require the final answer to be explicitly present
-- If unsure → COVERED
-
-Examples:
-
-Example 1:
-Question: What are the limitations of transformers?
-Context: "Transformers require large computational resources."
-Answer: COVERED
-
-Example 2:
-Question: How does attention work?
-Context: "Attention assigns weights to input tokens."
-Answer: COVERED
-
-Example 3:
-Question: What is the capital of France?
-Context: "Recommendation systems suggest items to users."
-Answer: NOT_COVERED
-
-Now decide:
-
-Question: {question}
-
-Context:
-{context}
-
-Answer:"""),
+# ── HyDE (Groq llama-3.1-8b-instant) ─────────────────────────────────────────
+HYDE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a research paper assistant.
+Write a short hypothetical passage (3-5 sentences) that looks like it comes
+from an academic paper and directly answers the given question.
+Use academic language with specific technical details.
+Return ONLY the passage — no preamble, no explanation."""),
+    ("human", "Question: {question}\n\nHypothetical passage:")
 ])
 
 
-ROUTING_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a routing classifier for research QA.
+# ── Chat response (Qwen3-8B via HuggingFace) ─────────────────────────────────
+CHAT_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a friendly and helpful research assistant called ArxivLens.
+You help researchers explore and understand academic papers.
+When users chat casually, respond naturally and warmly.
+Keep responses concise and conversational."""),
+    ("human", "{message}")
+])
 
-Your task:
-Given a QUESTION and retrieved CONTEXT, decide how the answer should be derived.
 
-Output ONLY one word:
-- DIRECT → if the answer is explicitly stated in a single context chunk.
-- REASONING → if the answer requires combining multiple pieces of information, inference, or analysis.
+# ── Generic answer — score below threshold (Qwen3-8B via HuggingFace) ─────────
+GENERIC_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a knowledgeable research assistant.
+The question is NOT covered by the indexed academic papers.
+Answer from your general knowledge but be honest about it.
 
 Rules:
-- If the exact answer text appears → DIRECT
-- If you must connect ideas, compare, or infer → REASONING
-- If unsure → REASONING
+1. Start with: "Note: This answer is based on general knowledge, not the indexed papers."
+2. Answer accurately and helpfully
+3. Never pretend the answer comes from a specific indexed paper
 
-Examples:
-
-Example 1:
-Question: What year was BERT introduced?
-Context: "BERT was introduced by Google in 2018."
-Answer: DIRECT
-
-Example 2:
-Question: Why does BERT outperform traditional RNN models?
-Context: "BERT uses bidirectional attention. RNNs process text sequentially."
-Answer: REASONING
-
-Now classify:
-
-Question: {question}
-
-Context:
-{context}
-
-Answer:"""),
+End every response with exactly these two lines:
+**Confidence:** MEDIUM
+**Reason:** Answer based on general knowledge, not from indexed papers."""),
+    ("human", "Question: {question}")
 ])
 
 
+# ── Paper-based answer — score above threshold (Qwen3-8B via HuggingFace) ─────
 ANSWER_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are an expert research assistant helping users understand academic papers.
 
-Your rules:
+Rules:
 1. Answer based ONLY on the provided paper context
-2. Think step by step before answering
-3. Cite every claim with [paper title, page N]
+2. Cite every claim with [paper title, page N]
+3. Never hallucinate or add information not in context
 4. If context is insufficient say exactly what is missing
-5. Never hallucinate or add information not in context
-6. If the question asks about figures or charts describe what the figure shows
+5. If the question asks about figures or charts describe what the figure shows
 
-Answer format:
-**Answer:** [your detailed answer with citations]
-**Confidence:** HIGH / MEDIUM / LOW
-**Reason:** [why this confidence level]"""),
-    ("human", """Paper context:
-{context}
+End every response with exactly these two lines:
+**Confidence:** HIGH
+**Reason:** [one sentence explaining why]
 
-Question: {question}
-
-Answer:""")
+Where confidence is HIGH / MEDIUM / LOW."""),
+    ("human", "Paper context:\n{context}\n\nQuestion: {question}")
 ])
