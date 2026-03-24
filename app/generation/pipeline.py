@@ -1,10 +1,10 @@
-import re
 import requests
 from app.core.logger import logger
 from app.core.exceptions import PipelineError
 from app.core.settings import settings
 from app.models.schemas import QueryResult, Chunk, Message
 from app.generation.adaptive_rag import AdaptiveRAG
+from app.generation import prompts
 from app.retrieval import retrieve
 from app.retrieval.reranker import Reranker
 
@@ -23,6 +23,7 @@ class Pipeline:
                 history = []
 
             # ── Step 1: Manage history (phi3 via Ollama) ──────────────────
+            # Summarizes old messages beyond last 5 using phi3 (free)
             managed_history = self._manage_history(history)
 
             # ── Step 2: Classify intent (Groq llama-3.1-8b-instant) ───────
@@ -43,21 +44,16 @@ class Pipeline:
             # ── TASK path ──────────────────────────────────────────────────
 
             # ── Step 3: Contextualize query (phi3 via Ollama) ─────────────
+            # Rewrites follow-up questions to be self-contained
             contextualized = self._contextualize(question, managed_history)
             logger.info(f"[CONTEXT] Result: {contextualized[:80]}")
 
-            # ── Step 4: HyDE (Groq llama-3.1-8b-instant) ─────────────────
-            hypothetical = self.adaptive_rag.generate_hypothetical(contextualized)
-            logger.info(f"[HYDE] Using for retrieval: {hypothetical[:80]}...")
-
-            # ── Step 5: Retrieve top 10 chunks with scores ────────────────
-            chunks = retrieve(hypothetical)
+            # ── Step 4: Retrieve chunks (direct retrieval, NO HyDE) ───────
+            chunks = retrieve(contextualized)
             logger.info(f"[RETRIEVE] Got {len(chunks)} chunks")
-            if chunks:
-                scores = [c.get('score', 0.0) for c in chunks]
-                logger.info(f"[RETRIEVE] Scores: min={min(scores):.4f} max={max(scores):.4f} avg={sum(scores)/len(scores):.4f}")
-
+            
             if not chunks:
+                # No papers indexed at all
                 return QueryResult(
                     question=question,
                     answer="NO_PAPERS_INDEXED",
@@ -66,44 +62,82 @@ class Pipeline:
                     contextualized_query=contextualized
                 )
 
-            # ── Step 6: Score threshold check ─────────────────────────────
-            best_score = max(c.get("score", 0.0) for c in chunks)
-            logger.info(
-                f"[THRESHOLD] Best score: {best_score:.4f} | "
-                f"Threshold: {settings.score_threshold} | "
-                f"Path: {'PAPER' if best_score >= settings.score_threshold else 'GENERIC'}"
-            )
+            # ── Step 5: Filter by threshold >= 0.25 ───────────────────────
+            # Keep raw chunks before filtering to extract paper titles for web search
+            raw_chunks = chunks.copy()
+            
+            # Only keep chunks with similarity score >= 0.25
+            chunks = [c for c in chunks if c.get('score', 0.0) >= settings.score_threshold]
+            logger.info(f"[FILTER] {len(chunks)} chunks >= {settings.score_threshold} threshold")
 
-            if best_score < settings.score_threshold:
-                # Below threshold — generic answer from model knowledge
-                result = self.adaptive_rag.generate_generic(contextualized)
+            if not chunks:
+                # ── WEB SEARCH FALLBACK: No chunks >= 0.25 ─────────────────
+                logger.info("[FALLBACK] No chunks >= 0.25, triggering web search with paper names")
+                
+                # Extract paper titles from raw chunks (before filtering)
+                paper_titles = list(set([c.get('paper_title', 'Unknown') for c in raw_chunks]))
+                logger.info(f"[FALLBACK] Paper titles from low-relevance chunks: {paper_titles}")
+                
+                # Search web with question + paper names
+                web_results = self.adaptive_rag.search_web(contextualized, paper_titles)
+                
+                # Generate answer explaining papers don't cover this, but web results exist
+                result = self.adaptive_rag.generate_web_augmented(
+                    contextualized, web_results, paper_titles
+                )
+                
                 return QueryResult(
                     question=question,
                     answer=result["answer"],
-                    sources=[],
+                    sources=[],  # No paper sources since they weren't relevant enough (score < 0.25)
                     confidence=result["confidence"],
                     contextualized_query=contextualized
                 )
 
-            # ── Step 7: Rerank top 10 → top 3 (Groq llama-3.1-8b-instant) ─
-            # Rerank against original contextualized question (not HyDE)
+            # ── Step 6: Rerank with Groq (returns only chunks >= 6.0) ─────
+            # Reranker filters out anything below 6.0 score
             reranked = self.reranker.rerank(contextualized, chunks)
+            
             if not reranked:
-                reranked = chunks[:settings.top_k_rerank]
-            logger.info(f"[RERANK] Final chunks: {len(reranked)}")
-            for i, c in enumerate(reranked, 1):
-                logger.info(
-                    f"[RERANK] Chunk {i}: '{c.get('paper_title','?')[:40]}' "
-                    f"page={c.get('page_number','?')} "
-                    f"type={c.get('chunk_type','?')} "
-                    f"score={c.get('score',0.0):.4f}"
+                # ── WEB SEARCH FALLBACK: No chunks >= 6.0 after reranking ─
+                logger.info("[FALLBACK] No chunks >= 6.0 after reranking, triggering web search")
+                
+                # Get paper titles from the retrieved chunks (for context)
+                paper_titles = list(set([c.get('paper_title', 'Unknown') for c in chunks]))
+                logger.info(f"[FALLBACK] Paper titles for context: {paper_titles}")
+                
+                # Search web with question + paper names
+                web_results = self.adaptive_rag.search_web(contextualized, paper_titles)
+                
+                # Generate answer explaining papers don't cover this, but web results exist
+                result = self.adaptive_rag.generate_web_augmented(
+                    contextualized, web_results, paper_titles
+                )
+                
+                return QueryResult(
+                    question=question,
+                    answer=result["answer"],
+                    sources=[],  # No paper sources since they weren't relevant enough (score < 6)
+                    confidence=result["confidence"],
+                    contextualized_query=contextualized
                 )
 
-            # ── Step 8: Build context with metadata proof ─────────────────
+            # ── Step 7: Build context with metadata ───────────────────────
+            # We have chunks >= 6.0 — proceed with paper-based answer
             context = self._build_context(reranked)
+            logger.info(f"[CONTEXT] Built context from {len(reranked)} chunks")
 
-            # ── Step 9: Generate paper-based answer (Qwen3-8B via HF) ─────
-            result = self.adaptive_rag.generate_from_paper(contextualized, context)
+            # ── Step 8: Generate paper-based answer with history ──────────
+            # Prepare history text (last 5 messages + summary if exists)
+            history_text = ""
+            if managed_history:
+                history_text = "\n".join([f"{m.role}: {m.content}" for m in managed_history])
+                logger.debug(f"[HISTORY] Including {len(managed_history)} messages")
+
+            # Generate with paper context + conversation history
+            result = self.adaptive_rag.generate_from_paper_with_history(
+                contextualized, context, history_text
+            )
 
             return QueryResult(
                 question=question,
@@ -114,27 +148,29 @@ class Pipeline:
             )
 
         except Exception as e:
+            logger.error(f"Pipeline failed: {e}")
             raise PipelineError(f"Pipeline failed: {e}")
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Helper Methods ───────────────────────────────────────────────────────
 
     def _manage_history(self, history: list[Message]) -> list[Message]:
         """
-        Summarize old messages beyond max_history using phi3 (Ollama).
-        Free call — no API quota consumed.
+        Summarize old messages beyond max_history (5) using phi3 (Ollama).
+        Returns last 5 messages plus summary of older ones at start.
         """
         if len(history) <= settings.max_history:
             return history
+        
         old_messages = history[:-settings.max_history]
         recent_messages = history[-settings.max_history:]
         old_text = "\n".join([f"{m.role}: {m.content}" for m in old_messages])
-        logger.info(f"[HISTORY] Summarizing {len(old_messages)} old messages using phi3 (Ollama)")
+        
+        logger.info(f"[HISTORY] Summarizing {len(old_messages)} old messages using phi3")
         try:
-            prompt = (
-                f"Summarize this conversation in 2-3 sentences. "
-                f"Keep key research topics and important context:\n\n{old_text}"
-            )
+            # Use prompt from prompts.py
+            prompt = prompts.HISTORY_SUMMARY_PROMPT.format(text=old_text)
             summary = self._ollama(prompt, max_tokens=150)
+            
             if summary:
                 logger.info(f"[HISTORY] Summary: {summary[:100]}")
                 return [Message(
@@ -151,52 +187,56 @@ class Pipeline:
     def _contextualize(self, question: str, history: list[Message]) -> str:
         """
         Rewrite follow-up questions to be self-contained using phi3 (Ollama).
-        Free call — no API quota consumed.
-        Returns original question if no history or Ollama fails.
+        If no history or Ollama fails, returns original question.
         """
         if not history:
             logger.debug("[CONTEXT] No history — returning question as-is")
             return question
-        logger.info(f"[CONTEXT] Contextualizing using phi3 (Ollama)")
+        
+        logger.info(f"[CONTEXT] Contextualizing using phi3")
         try:
             history_text = "\n".join([f"{m.role}: {m.content}" for m in history])
-            prompt = (
-                f"Rewrite this question to be completely self-contained using the conversation history.\n"
-                f"If the question already makes sense alone return it unchanged.\n"
-                f"Return ONLY the rewritten question — no explanation.\n\n"
-                f"History:\n{history_text}\n\n"
-                f"Question: {question}\n\n"
-                f"Rewritten question:"
+            
+            # Use prompt from prompts.py
+            prompt = prompts.CONTEXTUALIZATION_PROMPT.format(
+                history=history_text,
+                question=question
             )
+            
             result = self._ollama(prompt, max_tokens=100)
-            if result:
-                logger.debug(f"[CONTEXT] Rewritten: {result[:100]}")
+            
+            if result and len(result) > 10:  # Basic validation
+                logger.info(f"[CONTEXT] Rewritten: {result[:100]}")
                 return result
             return question
+            
         except Exception as e:
             logger.warning(f"[CONTEXT] Failed: {e} — using original question")
             return question
 
     def _ollama(self, prompt: str, max_tokens: int = 256) -> str:
         """Direct Ollama call for phi3."""
-        response = requests.post(
-            f"{settings.ollama_url}/api/generate",
-            json={
-                "model": settings.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": max_tokens, "temperature": 0.1}
-            },
-            timeout=30
-        )
-        if response.status_code == 200:
-            return response.json().get("response", "").strip()
-        return ""
+        try:
+            response = requests.post(
+                f"{settings.ollama_url}/api/generate",
+                json={
+                    "model": settings.ollama_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens, "temperature": 0.1}
+                },
+                timeout=30
+            )
+            if response.status_code == 200:
+                return response.json().get("response", "").strip()
+            return ""
+        except Exception:
+            return ""
 
     def _build_context(self, chunks: list[dict]) -> str:
         """
         Format reranked chunks into context string for LLM.
-        Includes paper title, page, chunk type and score as metadata proof.
+        Includes paper title, page, chunk type and score as metadata.
         """
         parts = []
         for i, chunk in enumerate(chunks, 1):
@@ -204,12 +244,13 @@ class Pipeline:
                 f"[{i}] From '{chunk.get('paper_title', 'Unknown')}' "
                 f"(page {chunk.get('page_number', 'N/A')}, "
                 f"type: {chunk.get('chunk_type', 'content')}, "
-                f"score: {chunk.get('score', 0.0):.4f}):\n"
+                f"relevance: {chunk.get('rerank_score', chunk.get('score', 0)):.1f}):\n"
                 f"{chunk.get('content', '')}"
             )
         return "\n\n".join(parts)
 
     def _chunks_to_schema(self, chunks: list[dict]) -> list[Chunk]:
+        """Convert chunk dicts to Chunk schema objects."""
         result = []
         for chunk in chunks:
             try:

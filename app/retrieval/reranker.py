@@ -16,43 +16,30 @@ class Reranker:
     def rerank(self, query: str, chunks: list[dict]) -> list[dict]:
         """
         Rerank chunks using Groq llama-3.1-8b-instant scoring.
-        All chunks scored in parallel to minimise latency.
-        Returns exactly top_k chunks sorted by score descending.
-        Full debug logging shows every chunk score before and after ranking.
+        Returns chunks with score >= 6.0 only.
         """
-        logger.info(f"[RERANKER] Scoring {len(chunks)} chunks using {settings.groq_classifier_model}")
+        logger.info(f"[RERANKER] Scoring {len(chunks)} chunks")
         try:
             if not chunks:
                 return []
 
             scores = self._score_all(query, chunks)
 
-            # Log all chunk scores for visibility
-            for i, (score, chunk) in enumerate(zip(scores, chunks)):
-                logger.info(
-                    f"[RERANKER] Chunk {i+1:02d} | score={score:5.1f} | "
-                    f"type={chunk.get('chunk_type','?'):12s} | "
-                    f"page={str(chunk.get('page_number','?')):4s} | "
-                    f"preview={chunk.get('content','')[:60].replace(chr(10),' ')}..."
-                )
+            # Filter by threshold >= 6.0 instead of taking top_k
+            scored_chunks = []
+            for score, chunk in zip(scores, chunks):
+                if score >= 6.0:
+                    chunk_copy = chunk.copy()
+                    chunk_copy['rerank_score'] = score  # Store the LLM score
+                    scored_chunks.append((score, chunk_copy))
+                    logger.info(f"[RERANKER] Kept chunk score={score:.1f}")
 
-            scored = list(zip(scores, chunks))
-            scored.sort(key=lambda x: x[0], reverse=True)
-
-            top = min(self.top_k, len(scored))
-            reranked = [chunk for _, chunk in scored[:top]]
-
-            # Log selected top chunks
-            logger.info(f"[RERANKER] Selected top {len(reranked)} chunks:")
-            for i, (score, chunk) in enumerate(scored[:top], 1):
-                logger.info(
-                    f"[RERANKER] → #{i} score={score:5.1f} | "
-                    f"type={chunk.get('chunk_type','?'):12s} | "
-                    f"page={str(chunk.get('page_number','?')):4s} | "
-                    f"preview={chunk.get('content','')[:80].replace(chr(10),' ')}..."
-                )
-
-            return reranked
+            # Sort by score descending
+            scored_chunks.sort(key=lambda x: x[0], reverse=True)
+            result = [chunk for _, chunk in scored_chunks]
+            
+            logger.info(f"[RERANKER] {len(result)} chunks >= 6.0 threshold")
+            return result
 
         except Exception as e:
             raise RetrievalError(f"Reranking failed: {e}")

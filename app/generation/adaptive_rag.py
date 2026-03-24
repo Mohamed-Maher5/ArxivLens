@@ -3,27 +3,25 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from groq import Groq
 from huggingface_hub import InferenceClient
+from langchain_core.prompts import ChatPromptTemplate
 from app.core.logger import logger
 from app.core.settings import settings
+from app.generation import prompts
 
 
 class AdaptiveRAG:
 
     def __init__(self):
-        # Groq — intent classification, HyDE, reranker scoring
+        # Groq — intent classification, reranker scoring
         self.groq = Groq(api_key=settings.groq_api_key)
         # HuggingFace — final answer generation only
         self.hf = InferenceClient(api_key=settings.huggingface_api_key)
         logger.info("AdaptiveRAG initialized")
 
-    # ── Groq helper ───────────────────────────────────────────────────────────
+    # ── API Helpers ───────────────────────────────────────────────────────────
 
     def _groq(self, system: str, user: str, max_tokens: int = 20) -> str:
-        """
-        Call Groq llama-3.1-8b-instant.
-        Used for: intent classification, HyDE, reranker scoring.
-        Fast and cheap — ideal for short outputs.
-        """
+        """Call Groq llama-3.1-8b-instant. Fast and cheap for short outputs."""
         response = self.groq.chat.completions.create(
             model=settings.groq_classifier_model,
             messages=[
@@ -35,15 +33,8 @@ class AdaptiveRAG:
         )
         return (response.choices[0].message.content or "").strip()
 
-    # ── Ollama helper ─────────────────────────────────────────────────────────
-
     def _ollama(self, prompt: str, max_tokens: int = 256) -> str:
-        """
-        Call phi3 via Ollama local server.
-        Used for: query contextualization, history summarization.
-        Free — no API quota consumed.
-        Falls back to empty string on any failure.
-        """
+        """Call phi3 via Ollama local server. Free - no API quota."""
         try:
             response = requests.post(
                 f"{settings.ollama_url}/api/generate",
@@ -66,110 +57,114 @@ class AdaptiveRAG:
             logger.warning(f"Ollama unavailable: {e}")
             return ""
 
-    # ── HuggingFace helper ────────────────────────────────────────────────────
-
-    def _hf(self, system: str, user: str, max_tokens: int = 1024) -> str:
-        """
-        Call Qwen/Qwen3-8B via HuggingFace Inference API.
-        Used for: final answer generation only (generic + paper-based + chat).
-        Strips Qwen3 <think>...</think> blocks before returning.
-        """
+    def _hf_with_prompt(self, prompt_template: ChatPromptTemplate, variables: dict, max_tokens: int = 1024) -> str:
+        """Generate using HuggingFace with a langchain prompt template."""
+        # Format the prompt
+        messages = prompt_template.format_messages(**variables)
+        
+        # Convert to HF format
+        hf_messages = []
+        for msg in messages:
+            role = "system" if msg.type == "system" else "user"
+            hf_messages.append({"role": role, "content": msg.content})
+        
         response = self.hf.chat.completions.create(
             model=settings.hf_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user}
-            ],
+            messages=hf_messages,
             max_tokens=max_tokens,
             temperature=0.1,
         )
         raw = (response.choices[0].message.content or "").strip()
         return self._clean(raw)
 
-    # ── Intent classification (Groq) ──────────────────────────────────────────
+    # ── Web Search ────────────────────────────────────────────────────────────
+
+    def search_web(self, query: str, paper_titles: list[str]) -> str:
+        """
+        Search web using SerpAPI when paper doesn't cover the topic.
+        Includes paper names in search for context.
+        """
+        if not settings.serpapi_api_key:
+            logger.warning("No SERPAPI key configured, skipping web search")
+            return "Web search not available - no API key configured."
+        
+        # Construct search query with paper names for context
+        paper_context = " ".join([f'"{title}"' for title in paper_titles[:3]])
+        search_query = f"{query} {paper_context}"
+        
+        logger.info(f"[WEB SEARCH] Query: {search_query[:100]}...")
+        
+        try:
+            params = {
+                "q": search_query,
+                "api_key": settings.serpapi_api_key,
+                "engine": "google",
+                "num": 5
+            }
+            response = requests.get("https://serpapi.com/search", params=params, timeout=10)
+            data = response.json()
+            
+            # Extract organic results
+            results = []
+            for result in data.get("organic_results", [])[:3]:
+                title = result.get("title", "")
+                snippet = result.get("snippet", "")
+                link = result.get("link", "")
+                results.append(f"Source: {title}\nURL: {link}\nSummary: {snippet}")
+            
+            web_text = "\n\n".join(results) if results else "No relevant web results found."
+            logger.info(f"[WEB SEARCH] Found {len(results)} results")
+            return web_text
+            
+        except Exception as e:
+            logger.error(f"[WEB SEARCH] Failed: {e}")
+            return "Web search unavailable due to error."
+
+    # ── Intent Classification ─────────────────────────────────────────────────
 
     def classify_intent(self, message: str) -> str:
-        """
-        Classify user message as CHAT or TASK using Groq.
-        Outputs only 1 word — very cheap.
-        Returns 'chat' or 'task'.
-        """
+        """Classify as CHAT or TASK using Groq."""
         try:
             logger.debug(f"[INTENT] Input: {message[:80]}")
-            system = """You are an intent classifier for an academic paper QA system.
-Classify the user message as either CHAT or TASK.
-Output ONLY one word — either CHAT or TASK.
-
-- CHAT → casual conversation, greetings, small talk, opinions, feelings
-- TASK → questions about a paper, research, science, methodology, results, authors
-
-Examples:
-"hi how are you" → CHAT
-"who are the authors?" → TASK
-"what are the limitations?" → TASK
-"thanks!" → CHAT
-"what is machine learning?" → TASK"""
-
-            result = self._groq(system, message, max_tokens=5)
-            logger.debug(f"[INTENT] Raw output: '{result}'")
+            
+            # Use format_messages() to get message objects with .type attribute
+            messages = prompts.INTENT_PROMPT.format_messages(message=message)
+            
+            system_msg = ""
+            user_msg = ""
+            for msg in messages:
+                if msg.type == "system":
+                    system_msg = msg.content
+                elif msg.type == "human":
+                    user_msg = msg.content
+            
+            result = self._groq(system_msg, user_msg, max_tokens=5)
             first_word = result.upper().split()[0] if result.split() else "TASK"
             intent = "chat" if first_word == "CHAT" else "task"
-            logger.info(f"[INTENT] Classified as: {intent.upper()} (model: {settings.groq_classifier_model})")
+            logger.info(f"[INTENT] Classified as: {intent.upper()}")
             return intent
         except Exception as e:
             logger.warning(f"[INTENT] Failed: {e} — defaulting to TASK")
             return "task"
 
-    # ── HyDE (Groq) ───────────────────────────────────────────────────────────
-
-    def generate_hypothetical(self, question: str) -> str:
-        """
-        HyDE via Groq: Generate a hypothetical academic passage
-        that would answer the question. Embed this instead of the
-        raw question for better semantic search in Qdrant.
-        Falls back to original question on failure.
-        """
-        try:
-            logger.debug(f"[HYDE] Input question: {question[:80]}")
-            system = """You are a research paper assistant.
-Write a short hypothetical passage (3-5 sentences) that looks like it comes
-from an academic paper and directly answers the given question.
-Use academic language with specific technical details.
-Return ONLY the passage — no preamble, no explanation."""
-
-            result = self._groq(
-                system,
-                f"Question: {question}\n\nHypothetical passage:",
-                max_tokens=150
-            )
-            if not result:
-                logger.warning(f"[HYDE] Empty result — falling back to original question")
-                return question
-            logger.info(f"[HYDE] Generated (model: {settings.groq_classifier_model}): {result[:120]}...")
-            return result
-        except Exception as e:
-            logger.warning(f"[HYDE] Failed: {e} — falling back to original question")
-            return question
-
-    # ── Reranker scoring (Groq) ───────────────────────────────────────────────
+    # ── Reranker Scoring ─────────────────────────────────────────────────────
 
     def score_chunk(self, query: str, content: str) -> float:
-        """
-        Score relevance of a single chunk to the query using Groq.
-        Returns float 0.0–10.0.
-        """
+        """Score relevance 0-10 using Groq. Called by Reranker."""
         try:
+            user_content = (
+                f"Score the relevance of this chunk to the query.\n"
+                f"Query: {query}\n"
+                f"Chunk: {content[:400]}\n\n"
+                f"Respond with ONLY a single number between 0 and 10."
+            )
+            
             response = self.groq.chat.completions.create(
                 model=settings.groq_classifier_model,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Score the relevance of this chunk to the query.\n"
-                        f"Query: {query}\n"
-                        f"Chunk: {content[:400]}\n\n"
-                        f"Respond with ONLY a single number between 0 and 10."
-                    )
-                }],
+                messages=[
+                    {"role": "system", "content": prompts.RERANK_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ],
                 max_tokens=5,
                 temperature=0,
             )
@@ -179,129 +174,118 @@ Return ONLY the passage — no preamble, no explanation."""
         except Exception:
             return 0.0
 
-    # ── Generation (HuggingFace Qwen3-8B) ────────────────────────────────────
+    # ── Generation Methods ────────────────────────────────────────────────────
 
     def generate_chat(self, message: str) -> str:
-        """
-        Casual conversational response via Qwen3-8B.
-        CHAT intent only — no retrieval context.
-        """
+        """Casual conversational response via Qwen3-8B."""
         try:
             logger.debug(f"[CHAT] Input: {message[:80]}")
-            system = """You are a friendly and helpful research assistant called ArxivLens.
-You help researchers explore and understand academic papers.
-When users chat casually, respond naturally and warmly.
-Keep responses concise and conversational."""
-
-            answer = self._hf(system, message, max_tokens=256)
-            logger.info(f"[CHAT] Generated (model: {settings.hf_model}): {answer[:120]}...")
+            answer = self._hf_with_prompt(
+                prompts.CHAT_PROMPT,
+                {"message": message},
+                max_tokens=256
+            )
+            logger.info(f"[CHAT] Generated: {answer[:120]}...")
             return answer
         except Exception as e:
             logger.error(f"[CHAT] Failed: {e}")
             return "Hi! I'm ArxivLens, here to help you explore academic papers. What would you like to know?"
 
-    def generate_generic(self, question: str) -> dict:
-        """
-        Answer from general model knowledge via Qwen3-8B.
-        Used when best retrieval score < threshold.
-        Always includes disclaimer — NOT from indexed papers.
-        """
-        logger.info(f"[GENERIC] Generating for: {question[:80]}")
-        try:
-            system = """You are a knowledgeable research assistant.
-The question is NOT covered by the indexed academic papers.
-Answer from your general knowledge but be honest about it.
-
-Rules:
-1. Start with: "Note: This answer is based on general knowledge, not the indexed papers."
-2. Answer accurately and helpfully
-3. Never pretend the answer comes from a specific indexed paper
-
-End every response with exactly these two lines:
-**Confidence:** MEDIUM
-**Reason:** Answer based on general knowledge, not from indexed papers."""
-
-            answer = self._hf(system, f"Question: {question}", max_tokens=1024)
-            confidence = self._parse_confidence(answer)
-            logger.info(f"[GENERIC] Done (model: {settings.hf_model}) | Confidence: {confidence}")
-            logger.debug(f"[GENERIC] Answer preview: {answer[:200]}")
-            return {"answer": answer, "confidence": confidence, "source": "generic"}
-        except Exception as e:
-            logger.error(f"[GENERIC] Failed: {e}")
-            return {
-                "answer": "I couldn't generate an answer at this time.",
-                "confidence": "LOW",
-                "source": "generic"
-            }
 
     def generate_from_paper(self, question: str, context: str) -> dict:
-        """
-        Answer strictly from indexed paper context via Qwen3-8B.
-        Used when best retrieval score >= threshold.
-        Cites paper title and page for every claim.
-        """
+        """Answer strictly from indexed paper context (no history)."""
         logger.info(f"[PAPER] Generating for: {question[:80]}")
         logger.debug(f"[PAPER] Context preview: {context[:300]}")
         try:
-            system = """You are an expert research assistant helping users understand academic papers.
-
-Rules:
-1. Answer based ONLY on the provided paper context
-2. Cite every claim with [paper title, page N]
-3. Never hallucinate or add information not in context
-4. If context is insufficient say exactly what is missing
-5. If the question asks about figures or charts describe what the figure shows
-
-End every response with exactly these two lines:
-**Confidence:** HIGH
-**Reason:** [one sentence explaining why]
-
-Where confidence is HIGH / MEDIUM / LOW."""
-
-            user = f"Paper context:\n{context}\n\nQuestion: {question}"
-            answer = self._hf(system, user, max_tokens=1024)
+            answer = self._hf_with_prompt(
+                prompts.PAPER_ANSWER_PROMPT,
+                {"context": context, "question": question},
+                max_tokens=1024
+            )
             confidence = self._parse_confidence(answer)
-            logger.info(f"[PAPER] Done (model: {settings.hf_model}) | Confidence: {confidence}")
-            logger.debug(f"[PAPER] Answer preview: {answer[:200]}")
+            logger.info(f"[PAPER] Done | Confidence: {confidence}")
             return {"answer": answer, "confidence": confidence, "source": "paper"}
         except Exception as e:
             logger.error(f"[PAPER] Failed: {e}")
-            return {"answer": "INADEQUATE", "confidence": "LOW", "source": "paper"}
+            return {"answer": "Error generating answer from papers.", "confidence": "LOW", "source": "paper"}
+
+    def generate_from_paper_with_history(self, question: str, context: str, history_text: str) -> dict:
+        """
+        Answer from paper context WITH conversation history.
+        Used when chunks >= 6.0 after reranking.
+        """
+        logger.info(f"[PAPER+HISTORY] Generating for: {question[:80]}")
+        try:
+            answer = self._hf_with_prompt(
+                prompts.PAPER_ANSWER_WITH_HISTORY_PROMPT,
+                {
+                    "context": context,
+                    "question": question,
+                    "history": history_text
+                },
+                max_tokens=1024
+            )
+            confidence = self._parse_confidence(answer)
+            logger.info(f"[PAPER+HISTORY] Done | Confidence: {confidence}")
+            return {"answer": answer, "confidence": confidence, "source": "paper"}
+        except Exception as e:
+            logger.error(f"[PAPER+HISTORY] Failed: {e}")
+            return {"answer": "Error generating answer.", "confidence": "LOW", "source": "paper"}
+
+    def generate_web_augmented(self, question: str, web_results: str, paper_titles: list[str]) -> dict:
+        """
+        Generate answer when paper doesn't cover topic (either < 0.25 or < 6.0).
+        Unified fallback for both cases.
+        """
+        logger.info(f"[WEB] Generating web-augmented answer for: {question[:80]}")
+        try:
+            answer = self._hf_with_prompt(
+                prompts.WEB_AUGMENTED_PROMPT,
+                {
+                    "question": question,
+                    "web_results": web_results,
+                    "paper_titles": ", ".join(paper_titles)
+                },
+                max_tokens=1024
+            )
+            confidence = self._parse_confidence(answer)
+            logger.info(f"[WEB] Done | Confidence: {confidence}")
+            return {
+                "answer": answer,
+                "confidence": confidence,
+                "source": "web_search"
+            }
+        except Exception as e:
+            logger.error(f"[WEB] Failed: {e}")
+            return {
+                "answer": "The indexed papers don't cover this topic, and I couldn't retrieve web search results.",
+                "confidence": "LOW",
+                "source": "web_search"
+            }
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _clean(self, text: str) -> str:
-        """Strip <think>...</think> blocks Qwen3 emits in thinking mode."""
+        """Strip <think>...</think> blocks Qwen3 emits."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     def _parse_confidence(self, answer: str) -> str:
-        """
-        Extract confidence from structured field:
-            **Confidence:** HIGH / MEDIUM / LOW
-        Tries 3 patterns. Only searches last 3 lines for fallback
-        to avoid false positives in the answer body.
-        """
+        """Extract confidence from structured field: **Confidence:** HIGH/MEDIUM/LOW"""
         match = re.search(
             r"\*{0,2}Confidence\*{0,2}\s*:\s*(HIGH|MEDIUM|LOW)",
             answer, re.IGNORECASE
         )
         if match:
-            level = match.group(1).upper()
-            logger.info(f"Parsed confidence: {level}")
-            return level
+            return match.group(1).upper()
 
         for line in answer.splitlines():
             if re.match(r"^(HIGH|MEDIUM|LOW)$", line.strip(), re.IGNORECASE):
-                level = line.strip().upper()
-                logger.info(f"Parsed confidence from standalone line: {level}")
-                return level
+                return line.strip().upper()
 
         last_lines = "\n".join(answer.splitlines()[-3:])
         match = re.search(r"\b(HIGH|MEDIUM|LOW)\b", last_lines, re.IGNORECASE)
         if match:
-            level = match.group(1).upper()
-            logger.info(f"Parsed confidence from answer tail: {level}")
-            return level
+            return match.group(1).upper()
 
-        logger.warning("Confidence field not found — defaulting to HIGH")
-        return "HIGH"
+        logger.warning("Confidence field not found — defaulting to MEDIUM")
+        return "MEDIUM"

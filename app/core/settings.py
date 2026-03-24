@@ -43,8 +43,12 @@ class Settings(BaseSettings):
     # RRF hybrid scores range 0.09–0.50 (rank-based, not cosine).
     # Threshold set to 0.10 — filters only truly irrelevant queries.
     # The LLM answer itself handles cases where chunks are off-topic.
-    score_threshold: float = 0.10
+    score_threshold: float = 0.25
     max_history: int = 5
+    rerank_score_threshold: float = 6.0  
+
+    # web search:
+    serpapi_api_key: str = "" 
 
     class Config:
         env_file = ".env"
