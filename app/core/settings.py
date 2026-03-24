@@ -59,8 +59,4 @@ class Settings(BaseSettings):
     max_history: int = 5
     rerank_score_threshold: float = 6.0  
 
-    # ── Web Search ────────────────────────────────────────────
-    serpapi_api_key: str = "" 
-
-
 settings = Settings()

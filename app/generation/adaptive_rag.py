@@ -43,8 +43,12 @@ class AdaptiveRAG:
             )
             if response.status_code == 200:
                 return response.json().get("response", "").strip()
+            # ADD THIS LINE:
+            logger.warning(f"[OLLAMA] Non-200 status: {response.status_code}")
             return ""
-        except Exception:
+        except Exception as e:
+            # CHANGE THIS LINE to include error details:
+            logger.warning(f"[OLLAMA] Error: {e}")
             return ""
 
     def _hf_with_prompt(self, prompt_template: ChatPromptTemplate, variables: dict, max_tokens: int = 1024) -> str:

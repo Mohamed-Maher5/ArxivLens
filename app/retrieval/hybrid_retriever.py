@@ -79,22 +79,6 @@ class HybridRetriever:
                 payload["score"] = round(float(point.score), 4)
                 chunks.append(payload)
 
-            # ── Normal vector search (dense only) — commented out ──────────
-            # results = self.client.query_points(
-            #     collection_name=self.collection,
-            #     query=dense,
-            #     using=DENSE_VECTOR_NAME,
-            #     limit=self.top_k,
-            #     with_payload=True,
-            #     with_vectors=False,
-            # )
-            # chunks = []
-            # for point in results.points:
-            #     payload = point.payload.copy()
-            #     payload["score"] = round(float(point.score), 4)
-            #     chunks.append(payload)
-            # ──────────────────────────────────────────────────────────────
-
             # Debug: log all retrieved chunks with scores
             logger.info(f"[RETRIEVE] Got {len(chunks)} chunks via hybrid search (RRF)")
             for i, chunk in enumerate(chunks, 1):

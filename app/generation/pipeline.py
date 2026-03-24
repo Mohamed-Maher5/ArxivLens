@@ -1,5 +1,4 @@
 import requests
-import os
 from app.core.logger import logger
 from app.core.exceptions import PipelineError
 from app.core.settings import settings
@@ -26,7 +25,7 @@ class Pipeline:
         logger.info("Pipeline initialized")
 
     def run(self, question: str, history: list[Message] = None) -> QueryResult:
-        if LANGSMITH_AVAILABLE and os.getenv("LANGCHAIN_TRACING_V2") == "true":
+        if LANGSMITH_AVAILABLE and settings.langchain_tracing_v2:
             return self._run_traced(question, history)
         return self._run_pipeline(question, history)
 
@@ -49,21 +48,18 @@ class Pipeline:
             contextualized = self._contextualize(question, managed_history)
             chunks = self._retrieve_chunks(contextualized)
 
-            # ❌ No fallback anymore
             if not chunks:
-                return self._no_papers_response(question, contextualized)
+                return self._no_papers_response(question, managed_history)
 
             filtered_chunks = self._filter_chunks(chunks)
 
-            # ❌ No web fallback → just stop
             if not filtered_chunks:
-                return self._no_papers_response(question, contextualized)
+                return self._no_papers_response(question, managed_history)
 
             reranked = self._rerank_chunks(contextualized, filtered_chunks)
 
-            # ❌ No web fallback → just stop
             if not reranked:
-                return self._no_papers_response(question, contextualized)
+                return self._no_papers_response(question, managed_history)
 
             return self._generate_paper_answer(
                 question, contextualized, reranked, managed_history
