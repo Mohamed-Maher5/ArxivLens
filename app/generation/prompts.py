@@ -89,31 +89,27 @@ Paper context:
 Question: {question}""")
 ])
 
-
-# ── Web Augmented Answer — When Papers Don't Cover Topic ──────────────────────
-WEB_AUGMENTED_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a research assistant. The indexed papers do not contain sufficient information to answer this question.
-You searched the web for additional information to help the user.
+# ── Model Knowledge Fallback — No Paper Chunks ───────────────────────────────
+MODEL_KNOWLEDGE_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a research assistant helping a user explore academic topics.
+The indexed papers do not cover this specific question in detail.
+Use your knowledge and the conversation history to answer the question as accurately as possible.
 
 Rules:
-1. Start with: "Note: The indexed papers do not cover this specific question in detail. Here is what I found from web search:"
-2. Summarize the web search results accurately
-3. Mention which papers were checked
-4. Be honest that this comes from web search, not the papers
-
-End every response with exactly these two lines:
+1. Start by noting that the papers do not cover the question.
+2. Answer based on your general knowledge and the history provided.
+3. Be concise, clear, and academic.
+4. Do NOT invent citations or paper references.
+5. End every response with exactly these two lines:
 **Confidence:** MEDIUM
-**Reason:** Answer based on web search, not from indexed papers."""),
-    ("human", """Question: {question}
+**Reason:** Answer based on model knowledge, not indexed papers."""),
+    ("human", """Conversation history:
+{history}
 
-Papers checked: {paper_titles}
-
-Web search results:
-{web_results}
+Question: {question}
 
 Answer:""")
 ])
-
 
 # ── Reranker Scoring Prompt (Groq llama-3.1-8b-instant) ───────────────────────
 RERANK_SYSTEM_PROMPT = """You are a relevance scoring assistant for academic papers.

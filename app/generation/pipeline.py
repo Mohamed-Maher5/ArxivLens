@@ -26,53 +26,45 @@ class Pipeline:
         logger.info("Pipeline initialized")
 
     def run(self, question: str, history: list[Message] = None) -> QueryResult:
-        """Main pipeline entry point with optional LangSmith tracing."""
-        # Wrap with LangSmith trace if available
         if LANGSMITH_AVAILABLE and os.getenv("LANGCHAIN_TRACING_V2") == "true":
             return self._run_traced(question, history)
         return self._run_pipeline(question, history)
 
     @traceable(run_type="chain", name="arxivlens_pipeline")
     def _run_traced(self, question: str, history: list[Message] = None) -> QueryResult:
-        """Traced version of pipeline."""
         return self._run_pipeline(question, history)
 
     def _run_pipeline(self, question: str, history: list[Message] = None) -> QueryResult:
-        """Core pipeline logic."""
         logger.info(f"Pipeline running for: {question[:50]}...")
         try:
             if history is None:
                 history = []
 
-            # ── Step 1: Manage history ─────────────────────────────────────
             managed_history = self._manage_history(history)
-
-            # ── Step 2: Classify intent ──────────────────────────────────
             intent = self._classify_intent(question)
 
             if intent == "chat":
                 return self._handle_chat(question)
 
-            # ── TASK path ─────────────────────────────────────────────────
             contextualized = self._contextualize(question, managed_history)
             chunks = self._retrieve_chunks(contextualized)
-            
+
+            # ❌ No fallback anymore
             if not chunks:
                 return self._no_papers_response(question, contextualized)
 
-            # Filter by threshold >= 0.25
             filtered_chunks = self._filter_chunks(chunks)
-            
+
+            # ❌ No web fallback → just stop
             if not filtered_chunks:
-                return self._web_search_fallback(contextualized, chunks, "retrieval_low_score")
+                return self._no_papers_response(question, contextualized)
 
-            # Rerank with threshold >= 6.0
             reranked = self._rerank_chunks(contextualized, filtered_chunks)
-            
-            if not reranked:
-                return self._web_search_fallback(contextualized, filtered_chunks, "rerank_low_score")
 
-            # Generate paper-based answer
+            # ❌ No web fallback → just stop
+            if not reranked:
+                return self._no_papers_response(question, contextualized)
+
             return self._generate_paper_answer(
                 question, contextualized, reranked, managed_history
             )
@@ -81,44 +73,39 @@ class Pipeline:
             logger.error(f"Pipeline failed: {e}")
             raise PipelineError(f"Pipeline failed: {e}")
 
-    # ── Individual Steps (for tracing granularity) ─────────────────────────
+    # ─────────────────────────────────────────
 
     @traceable(run_type="llm", name="classify_intent")
     def _classify_intent(self, question: str) -> str:
-        """Classify user intent."""
         return self.adaptive_rag.classify_intent(question)
 
     @traceable(run_type="llm", name="manage_history")
     def _manage_history(self, history: list[Message]) -> list[Message]:
-        """Summarize and manage conversation history."""
         if len(history) <= settings.max_history:
             return history
         
         old_messages = history[:-settings.max_history]
         recent_messages = history[-settings.max_history:]
         old_text = "\n".join([f"{m.role}: {m.content}" for m in old_messages])
-        
-        logger.info(f"[HISTORY] Summarizing {len(old_messages)} old messages")
+
         try:
             prompt = prompts.HISTORY_SUMMARY_PROMPT.format(text=old_text)
             summary = self._ollama(prompt, max_tokens=150)
-            
+
             if summary:
                 return [Message(
                     role="system",
                     content=f"Earlier conversation summary: {summary}"
                 )] + recent_messages
             return recent_messages
-        except Exception as e:
-            logger.warning(f"[HISTORY] Failed: {e}")
+        except Exception:
             return recent_messages
 
     @traceable(run_type="llm", name="contextualize_query")
     def _contextualize(self, question: str, history: list[Message]) -> str:
-        """Rewrite query to be self-contained."""
         if not history:
             return question
-        
+
         try:
             history_text = "\n".join([f"{m.role}: {m.content}" for m in history])
             prompt = prompts.CONTEXTUALIZATION_PROMPT.format(
@@ -127,56 +114,25 @@ class Pipeline:
             )
             result = self._ollama(prompt, max_tokens=100)
             return result if result and len(result) > 10 else question
-        except Exception as e:
-            logger.warning(f"[CONTEXT] Failed: {e}")
+        except Exception:
             return question
 
     @traceable(run_type="retriever", name="retrieve_chunks")
     def _retrieve_chunks(self, contextualized: str) -> list:
-        """Retrieve chunks from vector store."""
-        chunks = retrieve(contextualized)
-        logger.info(f"[RETRIEVE] Got {len(chunks)} chunks")
-        return chunks
+        return retrieve(contextualized)
 
     @traceable(run_type="chain", name="filter_chunks")
     def _filter_chunks(self, chunks: list) -> list:
-        """Filter chunks by score >= 0.25."""
-        filtered = [c for c in chunks if c.get('score', 0.0) >= settings.score_threshold]
-        logger.info(f"[FILTER] {len(filtered)} chunks >= {settings.score_threshold}")
-        return filtered
+        return [c for c in chunks if c.get('score', 0.0) >= settings.score_threshold]
 
     @traceable(run_type="llm", name="rerank_chunks")
     def _rerank_chunks(self, contextualized: str, chunks: list) -> list:
-        """Rerank chunks with Groq, keep only >= 6.0."""
-        reranked = self.reranker.rerank(contextualized, chunks)
-        logger.info(f"[RERANK] {len(reranked)} chunks >= 6.0")
-        return reranked
-
-    @traceable(run_type="tool", name="web_search")
-    def _web_search_fallback(self, contextualized: str, chunks: list, reason: str) -> QueryResult:
-        """Fallback to web search when paper chunks insufficient."""
-        logger.info(f"[FALLBACK] {reason}, triggering web search")
-        
-        paper_titles = list(set([c.get('paper_title', 'Unknown') for c in chunks]))
-        web_results = self.adaptive_rag.search_web(contextualized, paper_titles)
-        result = self.adaptive_rag.generate_web_augmented(
-            contextualized, web_results, paper_titles
-        )
-        
-        return QueryResult(
-            question=contextualized,
-            answer=result["answer"],
-            sources=[],
-            confidence=result["confidence"],
-            contextualized_query=contextualized
-        )
+        return self.reranker.rerank(contextualized, chunks)
 
     @traceable(run_type="llm", name="generate_paper_answer")
-    def _generate_paper_answer(self, question: str, contextualized: str, 
-                               chunks: list, history: list[Message]) -> QueryResult:
-        """Generate answer from paper chunks with history."""
+    def _generate_paper_answer(self, question, contextualized, chunks, history):
         context = self._build_context(chunks)
-        
+
         history_text = ""
         if history:
             history_text = "\n".join([f"{m.role}: {m.content}" for m in history])
@@ -193,11 +149,9 @@ class Pipeline:
             contextualized_query=contextualized
         )
 
-    # ── Simple handlers ─────────────────────────────────────────────────────
+    # ─────────────────────────────────────────
 
     def _handle_chat(self, question: str) -> QueryResult:
-        """Handle chat intent."""
-        logger.info("Chat path selected — no retrieval")
         answer = self.adaptive_rag.generate_chat(question)
         return QueryResult(
             question=question,
@@ -207,20 +161,27 @@ class Pipeline:
             contextualized_query=question
         )
 
-    def _no_papers_response(self, question: str, contextualized: str) -> QueryResult:
-        """Return when no papers indexed."""
+    def _no_papers_response(self, question: str, history: list[Message]) -> QueryResult:
+        """Answer from model knowledge when no paper chunks exist."""
+        history_text = "\n".join([f"{m.role}: {m.content}" for m in history]) if history else ""
+        
+        answer = self.adaptive_rag._hf_with_prompt(
+            prompts.MODEL_KNOWLEDGE_FALLBACK_PROMPT,
+            {"history": history_text, "question": question},
+            max_tokens=512
+        )
+        
         return QueryResult(
             question=question,
-            answer="NO_PAPERS_INDEXED",
+            answer=answer,
             sources=[],
-            confidence="LOW",
-            contextualized_query=contextualized
+            confidence="MEDIUM",
+            contextualized_query=question
         )
 
-    # ── Helper methods (unchanged) ──────────────────────────────────────────
+    # ─────────────────────────────────────────
 
     def _ollama(self, prompt: str, max_tokens: int = 256) -> str:
-        """Direct Ollama call for phi3."""
         try:
             response = requests.post(
                 f"{settings.ollama_url}/api/generate",
@@ -239,20 +200,12 @@ class Pipeline:
             return ""
 
     def _build_context(self, chunks: list[dict]) -> str:
-        """Format chunks into context string."""
-        parts = []
-        for i, chunk in enumerate(chunks, 1):
-            parts.append(
-                f"[{i}] From '{chunk.get('paper_title', 'Unknown')}' "
-                f"(page {chunk.get('page_number', 'N/A')}, "
-                f"type: {chunk.get('chunk_type', 'content')}, "
-                f"relevance: {chunk.get('rerank_score', chunk.get('score', 0)):.1f}):\n"
-                f"{chunk.get('content', '')}"
-            )
-        return "\n\n".join(parts)
+        return "\n\n".join([
+            f"[{i}] {chunk.get('content', '')}"
+            for i, chunk in enumerate(chunks, 1)
+        ])
 
     def _chunks_to_schema(self, chunks: list[dict]) -> list[Chunk]:
-        """Convert chunk dicts to Chunk schema objects."""
         result = []
         for chunk in chunks:
             try:
@@ -264,8 +217,6 @@ class Pipeline:
                     content=chunk.get("content", ""),
                     chunk_type=chunk.get("chunk_type", "content"),
                     page_number=chunk.get("page_number"),
-                    caption=chunk.get("caption"),
-                    figure_description=chunk.get("figure_description")
                 ))
             except Exception:
                 continue
