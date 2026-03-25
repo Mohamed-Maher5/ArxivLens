@@ -1,11 +1,10 @@
 import arxiv
-import requests
 from pathlib import Path
 from app.core.logger import logger
 from app.core.exceptions import ArxivFetchError
 from app.core.settings import settings
 from app.models.schemas import Paper
-
+import time
 
 DATA_RAW = Path("data/raw")
 
@@ -42,21 +41,34 @@ class ArxivFetcher:
         except Exception as e:
             raise ArxivFetchError(f"Search failed for query '{query}': {e}")
 
-    def download_pdf(self, paper: Paper) -> Paper:
-        logger.info(f"Downloading PDF for: {paper.paper_id}")
-        try:
-            search = arxiv.Search(id_list=[paper.paper_id])
-            result = next(self.client.results(search))
-            pdf_path = DATA_RAW / f"{paper.paper_id}.pdf"
-            result.download_pdf(
-                dirpath=str(DATA_RAW),
-                filename=f"{paper.paper_id}.pdf"
-            )
-            paper.pdf_path = str(pdf_path)
-            logger.info(f"PDF saved to: {pdf_path}")
-            return paper
-        except Exception as e:
-            raise ArxivFetchError(f"Download failed for {paper.paper_id}: {e}")
+    def download_pdf(self, paper: Paper, max_retries: int = 3) -> Paper:
+        logger.info(f"Attempting download for: {paper.paper_id}")
+        pdf_path = DATA_RAW / f"{paper.paper_id}.pdf"
+        
+        for attempt in range(max_retries):
+            try:
+                search = arxiv.Search(id_list=[paper.paper_id])
+                result = next(self.client.results(search))
+                
+                result.download_pdf(
+                    dirpath=str(DATA_RAW),
+                    filename=f"{paper.paper_id}.pdf"
+                )
+                
+                paper.pdf_path = str(pdf_path)
+                logger.info(f"PDF saved successfully on attempt {attempt + 1}")
+                return paper
+
+            except Exception as e:
+                if "429" in str(e):
+                    wait_time = (attempt + 1) * 5  # Wait 5s, then 10s...
+                    logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Non-429 error during download: {e}")
+                    raise ArxivFetchError(f"Download failed: {e}")
+
+        raise ArxivFetchError("Download failed after multiple retries due to ArXiv rate limits.")
 
     def fetch_by_id(self, paper_id: str) -> Paper:
         logger.info(f"Fetching paper by ID: {paper_id}")

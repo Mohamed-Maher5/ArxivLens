@@ -92,18 +92,23 @@ Question: {question}""")
 # ── Model Knowledge Fallback — No Paper Chunks ───────────────────────────────
 MODEL_KNOWLEDGE_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a research assistant helping a user explore academic topics.
-The indexed papers do not cover this specific question in detail.
-Use your knowledge and the conversation history to answer the question as accurately as possible.
+The indexed paper chunks did not score high enough to be used as context for this question.
+However, you have been provided with the paper's metadata (title, authors, abstract) to ground your answer.
+Use the metadata, your general knowledge, and any conversation history to answer as accurately as possible.
 
 Rules:
-1. Start by noting that the papers do not cover the question.
-2. Answer based on your general knowledge and the history provided.
-3. Be concise, clear, and academic.
-4. Do NOT invent citations or paper references.
-5. End every response with exactly these two lines:
+1. Start by noting that detailed paper chunks were not retrieved for this question.
+2. Use the paper metadata below to stay grounded in what the paper is about.
+3. Use your general knowledge to expand on the question in the context of this paper's topic.
+4. Be concise, clear, and academic in tone.
+5. Do NOT invent specific results, tables, figures, or page-level citations.
+6. End every response with exactly these two lines:
 **Confidence:** MEDIUM
-**Reason:** Answer based on model knowledge, not indexed papers."""),
-    ("human", """Conversation history:
+**Reason:** Answer based on paper metadata and model knowledge, not retrieved chunks."""),
+    ("human", """Paper metadata:
+{metadata}
+
+Conversation history:
 {history}
 
 Question: {question}
