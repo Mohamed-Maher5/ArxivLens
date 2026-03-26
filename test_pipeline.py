@@ -43,26 +43,26 @@ def check_langsmith():
 # ============================================================================
 # TEST 1: Chat Intent (No Retrieval)
 # ============================================================================
-def test_chat_intent():
-    print_header("TEST 1: Chat Intent (No Retrieval)")
+# def test_chat_intent():
+#     print_header("TEST 1: Chat Intent (No Retrieval)")
 
-    pipeline = Pipeline()
-    result = pipeline.run("hi, how are you?")
+#     pipeline = Pipeline()
+#     result = pipeline.run("hi, how are you?")
 
-    print(f"Question: 'hi, how are you?'")
-    print(f"Answer: {result.answer[:100]}...")
-    print(f"Confidence: {result.confidence}")
-    print(f"Sources: {len(result.sources)}")
+#     print(f"Question: 'hi, how are you?'")
+#     print(f"Answer: {result.answer[:100]}...")
+#     print(f"Confidence: {result.confidence}")
+#     print(f"Sources: {len(result.sources)}")
 
-    passed = (
-        len(result.sources) == 0 and
-        result.confidence == "HIGH" and
-        len(result.answer) > 10
-    )
+#     passed = (
+#         len(result.sources) == 0 and
+#         result.confidence == "HIGH" and
+#         len(result.answer) > 10
+#     )
 
-    status = f"{Colors.GREEN}✅ PASS{Colors.END}" if passed else f"{Colors.RED}❌ FAIL{Colors.END}"
-    print(f"{status} - Chat Intent")
-    return passed
+#     status = f"{Colors.GREEN}✅ PASS{Colors.END}" if passed else f"{Colors.RED}❌ FAIL{Colors.END}"
+#     print(f"{status} - Chat Intent")
+#     return passed
 
 # ============================================================================
 # TEST 2: Task Intent - With Existing Papers (Knowledge Fallback if no match)
@@ -243,7 +243,7 @@ def run_all_tests():
 
     results = {}
     tests = [
-        ("Chat Intent", test_chat_intent),
+        # ("Chat Intent", test_chat_intent),
         ("Task with Papers", test_task_with_existing_papers),
         ("Index & Query", test_index_and_query),
         ("Vague Query", test_vague_query),

@@ -19,7 +19,6 @@ class Settings(BaseSettings):
 
     # ── LangSmith ─────────────────────────────────────────────
     langsmith_project: str = "arxiv-lens"
-    # Also support standard LangSmith env vars
     langchain_tracing_v2: bool = True
     langchain_endpoint: str = "https://api.smith.langchain.com"
     langchain_api_key: str = ""
@@ -33,30 +32,21 @@ class Settings(BaseSettings):
     qdrant_collection_name: str = "arxiv_papers"
 
     # ── Models ────────────────────────────────────────────────
-    # Groq — intent classification, reranker scoring
-    groq_classifier_model: str = "llama-3.1-8b-instant"
-
-    # HuggingFace — final answer generation only
-    hf_model: str = "Qwen/Qwen3-8B"
-
-    # Embeddings
-    bge_model_name: str = "BAAI/bge-m3"
-
-    # Ollama local — query contextualization + history summarization
+    groq_classifier_model: str = "llama-3.1-8b-instant"  # intent + reranker
+    hf_model: str = "Qwen/Qwen3-8B"                      # answer generation
+    bge_model_name: str = "BAAI/bge-m3"                  # embeddings
+    vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"  # ingestion
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "phi3"
-
-    # Ingestion only
-    vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
-    ollama_summarizer_model: str = "phi3"  # Can remove, not used anymore
+    ollama_model: str = "phi3"  # contextualization & history
 
     # ── Retrieval ─────────────────────────────────────────────
     chunk_size: int = 512
     chunk_overlap: int = 50
+    score_threshold: float = 0.3
+    max_history: int = 5
+    rerank_score_threshold: float = 6.0
     top_k_retrieval: int = 10
     top_k_rerank: int = 3
-    score_threshold: float = 0.25
-    max_history: int = 5
-    rerank_score_threshold: float = 6.0  
+
 
 settings = Settings()

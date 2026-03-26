@@ -55,21 +55,25 @@ class Pipeline:
             chunks = self._retrieve_chunks(contextualized)
 
             if not chunks:
-                metadata = self._load_paper_metadata()
-                return self._no_papers_response(question, managed_history, metadata)
+                # No chunks at all - use empty metadata
+                return self._no_papers_response(question, managed_history, "")
+
+            # Extract paper_id from chunks for metadata loading
+            paper_id = self._extract_paper_id_from_chunks(chunks)
 
             filtered_chunks = self._filter_chunks(chunks)
 
             if not filtered_chunks:
                 # Chunks exist but all scored below score_threshold (0.25)
-                metadata = self._load_paper_metadata(chunks)
+                metadata = self.get_paper_metadata(paper_id) if paper_id else ""
                 return self._no_papers_response(question, managed_history, metadata)
 
             reranked = self._rerank_chunks(contextualized, filtered_chunks)
 
             if not reranked:
                 # Chunks passed vector threshold but all failed reranker (< 6.0)
-                metadata = self._load_paper_metadata(filtered_chunks)
+                paper_id = self._extract_paper_id_from_chunks(filtered_chunks)
+                metadata = self.get_paper_metadata(paper_id) if paper_id else ""
                 return self._no_papers_response(question, managed_history, metadata)
 
             return self._generate_paper_answer(
@@ -168,74 +172,96 @@ class Pipeline:
             contextualized_query=question
         )
 
-    def _load_paper_metadata(self, chunks: list[dict] = None) -> str:
+    def _extract_paper_id_from_chunks(self, chunks: list) -> str | None:
         """
-        Build a metadata string (title, authors, truncated abstract) for the
-        fallback prompt.
-
-        Strategy:
-        1. If chunks were retrieved, extract paper_id from the first chunk and
-           load the corresponding processed JSON file for the full abstract.
-        2. If no chunks (nothing retrieved at all), scan data/processed/ for
-           the most recently modified file as a best-effort heuristic.
-        3. If no processed file found, return an empty string so the fallback
-           prompt still works gracefully.
+        Extract paper_id from the first chunk.
+        
+        Tries multiple common locations for robustness:
+        - chunk["paper_id"] (top-level)
+        - chunk["metadata"]["paper_id"] (nested)
+        - chunk["paper"]["id"] (alternative)
+        
+        Args:
+            chunks: List of chunk dictionaries from retrieval
+            
+        Returns:
+            paper_id string or None if not found
         """
-        paper_id = None
-
-        # Try to get paper_id from chunks payload
-        if chunks:
-            paper_id = chunks[0].get("paper_id")
-
-        if paper_id:
-            processed_path = DATA_PROCESSED / f"{paper_id}.json"
-            if processed_path.exists():
-                return self._format_metadata_from_file(processed_path)
-            logger.warning(f"[METADATA] Processed file not found for paper_id={paper_id}")
-
-        # Fallback: pick most recently modified processed file
-        processed_files = sorted(
-            DATA_PROCESSED.glob("*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
+        if not chunks or not isinstance(chunks, list):
+            return None
+        
+        first_chunk = chunks[0]
+        
+        if not isinstance(first_chunk, dict):
+            return None
+        
+        # Try different possible locations
+        paper_id = (
+            first_chunk.get("paper_id") or
+            first_chunk.get("metadata", {}).get("paper_id") or
+            first_chunk.get("paper", {}).get("id")
         )
-        if processed_files:
-            logger.info(f"[METADATA] Using most recent processed file: {processed_files[0].name}")
-            return self._format_metadata_from_file(processed_files[0])
+        
+        return paper_id
 
-        logger.warning("[METADATA] No processed files found — metadata will be empty")
-        return ""
-
-    def _format_metadata_from_file(self, path: Path) -> str:
-        """Read a processed JSON and return a formatted metadata string."""
+    def get_paper_metadata(self, paper_id: str) -> str:
+        """
+        Get formatted metadata for a paper by its ArXiv ID.
+        
+        Args:
+            paper_id: ArXiv paper ID (e.g., "2301.00001")
+            
+        Returns:
+            Formatted metadata string or empty string if not found
+        """
+        if not paper_id:
+            logger.warning("[METADATA] No paper_id provided")
+            return ""
+        
+        # Clean version suffix (e.g., "2301.00001v2" -> "2301.00001")
+        clean_id = paper_id.split('v')[0] if 'v' in paper_id else paper_id
+        
+        file_path = DATA_PROCESSED / f"{clean_id}.json"
+        
+        if not file_path.exists():
+            logger.warning(f"[METADATA] File not found for {clean_id}")
+            return ""
+        
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
+            
             title = data.get("title", "Unknown title")
             authors = data.get("authors", [])
             abstract = data.get("abstract", "")
             published = data.get("published", "")
-
-            # Truncate abstract to ABSTRACT_MAX_CHARS
-            abstract_snippet = abstract[:ABSTRACT_MAX_CHARS]
-            if len(abstract) > ABSTRACT_MAX_CHARS:
-                abstract_snippet += "..."
-
-            authors_str = ", ".join(authors) if authors else "Unknown authors"
-
-            metadata_lines = [
+            
+            # Format authors
+            if isinstance(authors, list):
+                authors_str = ", ".join(authors) if authors else "Unknown authors"
+            else:
+                authors_str = str(authors) if authors else "Unknown authors"
+            
+            # Truncate abstract
+            abstract_display = abstract[:500]
+            if len(abstract) > 500:
+                abstract_display += "..."
+            
+            lines = [
                 f"Title: {title}",
                 f"Authors: {authors_str}",
             ]
             if published:
-                metadata_lines.append(f"Published: {published}")
-            metadata_lines.append(f"Abstract (excerpt): {abstract_snippet}")
-
-            return "\n".join(metadata_lines)
-
+                lines.append(f"Published: {published}")
+            lines.append(f"Abstract: {abstract_display}")
+            
+            return "\n".join(lines)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"[METADATA] Invalid JSON in {file_path}: {e}")
+            return ""
         except Exception as e:
-            logger.warning(f"[METADATA] Failed to read {path}: {e}")
+            logger.error(f"[METADATA] Error reading {file_path}: {e}")
             return ""
 
     def _no_papers_response(
