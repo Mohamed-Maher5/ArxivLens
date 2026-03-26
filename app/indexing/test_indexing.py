@@ -7,7 +7,7 @@ from app.indexing.vector_store import VectorStore
 from app.core.logger import logger
 
 # Path to a parsed paper JSON (from your ingestion test)
-PARSED_JSON = Path("/mnt/hdd/projects/ArxivLens/data/processed/2105.02723v1.json")  # <- replace with a real file
+PARSED_JSON = Path("/mnt/hdd/projects/ArxivLens/data/processed/2006.16189v4.json")  # <- replace with a real file
 
 def test_indexing(parsed_file: Path):
     if not parsed_file.exists():
@@ -21,8 +21,7 @@ def test_indexing(parsed_file: Path):
     # Initialize components
     chunker = Chunker()
     embedder = Embedder()
-    store = VectorStore()
-
+    store = VectorStore(parsed_result['paper_id'])
     try:
         logger.info(f"Starting test indexing for paper: {parsed_result['paper_id']}")
 

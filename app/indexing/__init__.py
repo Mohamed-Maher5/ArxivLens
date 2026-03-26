@@ -7,11 +7,13 @@ from app.models.schemas import Chunk
 
 
 def index_paper(parsed_result: dict) -> list[Chunk]:
+    paper_id = parsed_result["paper_id"]
     chunker = Chunker()
     embedder = Embedder()
-    store = VectorStore()
+    # VectorStore now receives paper_id to derive the per-paper collection name.
+    store = VectorStore(paper_id=paper_id)
     try:
-        logger.info(f"Starting indexing for: {parsed_result['paper_id']}")
+        logger.info(f"Starting indexing for: {paper_id}")
         chunks = chunker.chunk(parsed_result)
         embedded = embedder.embed_chunks(chunks)
         store.store(embedded)

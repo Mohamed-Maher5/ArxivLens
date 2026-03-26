@@ -1,3 +1,4 @@
+# /mnt/hdd/projects/ArxivLens/app/generation/prompts.py
 from langchain_core.prompts import ChatPromptTemplate
 
 
@@ -7,15 +8,17 @@ INTENT_PROMPT = ChatPromptTemplate.from_messages([
 Classify the user message as either CHAT or TASK.
 Output ONLY one word — either CHAT or TASK.
 
-- CHAT → casual conversation, greetings, small talk, opinions, feelings
-- TASK → questions about a paper, research, science, methodology, results, authors
+- CHAT → casual conversation, greetings, small talk, opinions, feelings, thanks, bye
+- TASK → questions about research, science, papers, methodology, results, authors, concepts
 
 Examples:
 "hi how are you" → CHAT
 "who are the authors?" → TASK
 "what are the limitations?" → TASK
 "thanks!" → CHAT
-"what is machine learning?" → TASK"""),
+"what is machine learning?" → TASK
+"explain transformers" → TASK
+"good morning" → CHAT"""),
     ("human", "{message}")
 ])
 
@@ -36,79 +39,97 @@ Rewritten question:""")
 ])
 
 
-# ── Chat Response (Qwen3-8B via HuggingFace) ─────────────────────────────────
+# ── Chat Response WITH History (Qwen3-8B via HuggingFace) ────────────────────
 CHAT_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a friendly and helpful research assistant called ArxivLens.
 You help researchers explore and understand academic papers.
 When users chat casually, respond naturally and warmly.
-Keep responses concise and conversational."""),
-    ("human", "{message}")
-])
+Keep responses concise and conversational.
 
-
-# ── Paper-Based Answer — No History (Qwen3-8B via HuggingFace) ───────────────
-PAPER_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are an expert research assistant helping users understand academic papers.
-
-Rules:
-1. Answer based ONLY on the provided paper context
-2. Cite every claim with [paper title, page N]
-3. Never hallucinate or add information not in context
-4. If context is insufficient say exactly what is missing
-5. If the question asks about figures or charts describe what the figure shows
-
-End every response with exactly these two lines:
-**Confidence:** HIGH
-**Reason:** [one sentence explaining why]
-
-Where confidence is HIGH / MEDIUM / LOW."""),
-    ("human", "Paper context:\n{context}\n\nQuestion: {question}")
-])
-
-
-# ── Paper-Based Answer WITH History (Qwen3-8B via HuggingFace) ───────────────
-PAPER_ANSWER_WITH_HISTORY_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are an expert research assistant helping users understand academic papers.
-
-Rules:
-1. Answer based ONLY on the provided paper context
-2. Consider the conversation history for context but prioritize the paper content
-3. Cite every claim with [paper title, page N]
-4. Never hallucinate or add information not in context
-5. If the question asks about figures or charts describe what the figure shows
-
-End every response with exactly these two lines:
-**Confidence:** HIGH
-**Reason:** [one sentence explaining why]"""),
+Consider the conversation history for context."""),
     ("human", """Conversation history:
 {history}
 
-Paper context:
-{context}
+User message: {message}
 
-Question: {question}""")
+Respond naturally:""")
 ])
 
-# ── Model Knowledge Fallback — No Paper Chunks ───────────────────────────────
-MODEL_KNOWLEDGE_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a research assistant helping a user explore academic topics.
-The indexed paper chunks did not score high enough to be used as context for this question.
-However, you have been provided with the paper's metadata (title, authors, abstract) to ground your answer.
-Use the metadata, your general knowledge, and any conversation history to answer as accurately as possible.
+
+# ── Paper-Based Answer with Top-3 Chunks (Qwen3-8B via HuggingFace) ──────────
+PAPER_ANSWER_TOP3_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are an expert research assistant helping users understand academic papers.
 
 Rules:
-1. Start by noting that detailed paper chunks were not retrieved for this question.
-2. Use the paper metadata below to stay grounded in what the paper is about.
-3. Use your general knowledge to expand on the question in the context of this paper's topic.
-4. Be concise, clear, and academic in tone.
-5. Do NOT invent specific results, tables, figures, or page-level citations.
-6. End every response with exactly these two lines:
-**Confidence:** MEDIUM
-**Reason:** Answer based on paper metadata and model knowledge, not retrieved chunks."""),
-    ("human", """Paper metadata:
+1. Answer based ONLY on the provided paper chunks (top 3 most relevant)
+2. Cite every claim using format: [Source: "Paper Title", p.N]
+3. Synthesize information across chunks when they complement each other
+4. Never hallucinate or add information not in the chunks
+5. If chunks don't fully answer, clearly state what information is missing
+6. Write in a natural, engaging tone - avoid robotic repetition of chunk content
+7. Focus on insights and implications, not just summarizing chunks
+
+End your response with exactly these two lines:
+**Confidence:** HIGH|MEDIUM|LOW
+**Reason:** [one sentence explaining why]"""),
+    ("human", """Top 3 most relevant paper chunks:
+
+[Chunk 1]
+{chunk1_content}
+Source: "{chunk1_title}", page {chunk1_page}
+
+[Chunk 2]
+{chunk2_content}
+Source: "{chunk2_title}", page {chunk2_page}
+
+[Chunk 3]
+{chunk3_content}
+Source: "{chunk3_title}", page {chunk3_page}
+
+Conversation history:
+{history}
+
+Question: {question}
+
+Provide a comprehensive, well-synthesized answer citing the chunks above:""")
+])
+
+
+# ── General Knowledge Fallback (Qwen3-8B via HuggingFace) ─────────────────────
+GENERAL_KNOWLEDGE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a research assistant helping a user with an academic question.
+
+IMPORTANT: No specific paper chunks were retrieved that directly answer this question.
+The user is asking about a topic that may be related to a paper they have loaded,
+but the detailed content is not available in the indexed chunks.
+
+Your task:
+1. Acknowledge that no specific paper chunks address this question directly
+2. Use the paper metadata (title, abstract) to understand the paper's topic
+3. Use your general knowledge to provide a helpful, accurate answer
+4. Consider the conversation history for context
+5. Be honest about the limitations - do NOT invent specific results, tables, or figures
+
+Tone: Academic, helpful, honest about limitations."""),
+    ("human", """Paper metadata (for context on the paper's topic):
 {metadata}
 
 Conversation history:
+{history}
+
+User question: {question}
+
+Provide a helpful answer based on general knowledge, noting that specific paper chunks were not available:""")
+])
+
+
+# ── Model Knowledge Fallback — No Metadata (Qwen3-8B via HuggingFace) ───────
+MODEL_KNOWLEDGE_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a research assistant helping a user explore academic topics.
+No paper chunks or metadata are available for this question.
+Answer based on your general knowledge and the conversation history.
+Be concise and academic in tone."""),
+    ("human", """Conversation history:
 {history}
 
 Question: {question}

@@ -8,28 +8,35 @@ _cache = Cache()
 _reranker = Reranker()
 
 
-def retrieve(query: str) -> list[dict]:
+def retrieve(query: str, collection_name: str) -> list[dict]:
     """
-    Retrieve chunks for a query using normal vector search.
-    Returns list of chunk dicts, each containing a 'score' key
-    (cosine similarity, 0.0 – 1.0) alongside the chunk payload.
+    Retrieve chunks for a query from a specific per-paper collection.
 
-    Results are cached by query hash to avoid duplicate API calls
-    within the same session.
+    Args:
+        query:           The search query string.
+        collection_name: The Qdrant collection scoped to the target paper
+                         (e.g. "paper_1706_03762"). Use
+                         vector_store.collection_name_from_paper_id() to build this.
+
+    Returns:
+        List of chunk dicts, each containing a 'score' key (cosine similarity,
+        0.0–1.0). Results are cached per (query, collection_name) pair to avoid
+        duplicate API calls within the same session.
     """
-    cached = _cache.get(query)
+    cached = _cache.get(query, collection_name)
     if cached:
         return cached
     try:
         retriever = HybridRetriever()
-        chunks = retriever.retrieve(query)
-        _cache.set(query, chunks)
+        chunks = retriever.retrieve(query, collection_name)
+        _cache.set(query, chunks, collection_name)
         return chunks
     except RetrievalError:
         raise
     except Exception as e:
         raise RetrievalError(f"Retrieval pipeline failed: {e}")
-    
+
+
 def rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
     """
     Rerank a list of retrieved chunks using Reranker.

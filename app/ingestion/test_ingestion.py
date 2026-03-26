@@ -3,7 +3,7 @@ from app.ingestion import ingest_paper
 
 
 def main():
-    query = "attention is all you need"  # you can change this
+    query = "What is the Machine Learning?"  # you can change this
 
     fetcher = ArxivFetcher()
 

@@ -1,3 +1,4 @@
+import re
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     VectorParams,
@@ -17,29 +18,59 @@ SPARSE_VECTOR_NAME = "sparse"
 VECTOR_SIZE = 1024
 
 
-class VectorStore:
+def collection_name_from_paper_id(paper_id: str) -> str:
+    """
+    Derive a Qdrant-safe collection name from an ArXiv paper ID.
 
-    def __init__(self):
+    Examples:
+        "1706.03762"    -> "paper_1706_03762"
+        "1706.03762v2"  -> "paper_1706_03762v2"
+        "2301.00001"    -> "paper_2301_00001"
+
+    Rules applied:
+        - Prefix with "paper_"
+        - Replace dots and any other non-alphanumeric chars (except underscores) with "_"
+    """
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", paper_id)
+    return f"paper_{sanitized}"
+
+
+class VectorStore:
+    """
+    Manages per-paper Qdrant collections.
+
+    Each paper gets its own collection named after its ArXiv ID
+    (e.g. paper_1706_03762). Collections are created on first use
+    and reused on subsequent calls.
+    """
+
+    def __init__(self, paper_id: str):
+        """
+        Args:
+            paper_id: ArXiv paper ID used to derive the collection name.
+        """
+        self.collection = collection_name_from_paper_id(paper_id)
         try:
             if settings.qdrant_url:
                 self.client = QdrantClient(
                     url=settings.qdrant_url,
                     api_key=settings.qdrant_api_key
                 )
-                logger.info("Connected to Qdrant Cloud")
+                logger.info(f"Connected to Qdrant Cloud (collection: {self.collection})")
             else:
                 self.client = QdrantClient(
                     host=settings.qdrant_host,
                     port=settings.qdrant_port
                 )
-                logger.info("Connected to Qdrant local")
-            self.collection = settings.qdrant_collection_name
+                logger.info(f"Connected to Qdrant local (collection: {self.collection})")
+
             self._ensure_collection()
             logger.info("VectorStore initialized")
         except Exception as e:
             raise QdrantConnectionError(f"Failed to connect to Qdrant: {e}")
 
     def _ensure_collection(self):
+        """Create the collection if it doesn't already exist."""
         existing = [c.name for c in self.client.get_collections().collections]
         if self.collection not in existing:
             self.client.create_collection(
@@ -61,7 +92,7 @@ class VectorStore:
             logger.info(f"Using existing collection: {self.collection}")
 
     def store(self, embedded_chunks: list[dict]):
-        logger.info(f"Storing {len(embedded_chunks)} chunks in Qdrant")
+        logger.info(f"Storing {len(embedded_chunks)} chunks in '{self.collection}'")
         try:
             batch_size = 20
             for i in range(0, len(embedded_chunks), batch_size):
@@ -95,7 +126,10 @@ class VectorStore:
                     collection_name=self.collection,
                     points=points
                 )
-                logger.info(f"Stored batch {i // batch_size + 1}/{-(-len(embedded_chunks) // batch_size)}")
+                logger.info(
+                    f"Stored batch {i // batch_size + 1}/"
+                    f"{-(-len(embedded_chunks) // batch_size)}"
+                )
             logger.info(f"Stored {len(embedded_chunks)} chunks successfully")
         except Exception as e:
             raise QdrantConnectionError(f"Failed to store chunks: {e}")

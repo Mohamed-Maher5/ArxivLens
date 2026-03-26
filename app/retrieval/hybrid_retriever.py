@@ -25,33 +25,32 @@ class HybridRetriever:
                 host=settings.qdrant_host,
                 port=settings.qdrant_port
             )
-        self.collection = settings.qdrant_collection_name
         self.embedder = Embedder()
         self.top_k = settings.top_k_retrieval
         logger.info("HybridRetriever initialized")
 
-    def retrieve(self, query: str) -> list[dict]:
+    def retrieve(self, query: str, collection_name: str) -> list[dict]:
         """
         Hybrid search — dense (BGE-M3) + sparse (BM25) fused via RRF.
-        Returns top_k chunks with scores. Each chunk dict has a 'score' key.
 
-        Dense search finds semantically similar chunks.
-        Sparse search finds keyword-matching chunks.
-        RRF fusion combines both for best recall.
+        Args:
+            query:           The search query string.
+            collection_name: The per-paper Qdrant collection to search in.
 
-        Full debug logging shows all retrieved chunks and their scores.
-
-        Normal vector search (dense only) is kept below as fallback comment.
+        Returns:
+            List of chunk dicts, each with a 'score' key (0.0–1.0).
         """
-        logger.info(f"[RETRIEVE] Hybrid search for: {query[:60]}...")
+        logger.info(
+            f"[RETRIEVE] Hybrid search | collection={collection_name} | "
+            f"query={query[:60]}..."
+        )
         try:
             query_vectors = self.embedder.embed_query(query)
             dense = query_vectors["dense_vector"]
             sparse = query_vectors["sparse_vector"]
 
-            # ── Hybrid search (dense + sparse via RRF) ─────────────────────
             results = self.client.query_points(
-                collection_name=self.collection,
+                collection_name=collection_name,
                 prefetch=[
                     Prefetch(
                         query=dense,
@@ -79,17 +78,16 @@ class HybridRetriever:
                 payload["score"] = round(float(point.score), 4)
                 chunks.append(payload)
 
-            # Debug: log all retrieved chunks with scores
             logger.info(f"[RETRIEVE] Got {len(chunks)} chunks via hybrid search (RRF)")
             for i, chunk in enumerate(chunks, 1):
                 logger.info(
-                    f"[RETRIEVE] Chunk {i:02d} | score={chunk.get('score',0):.4f} | "
-                    f"type={chunk.get('chunk_type','?'):12s} | "
-                    f"page={str(chunk.get('page_number','?')):4s} | "
-                    f"preview={chunk.get('content','')[:60].replace(chr(10),' ')}..."
+                    f"[RETRIEVE] Chunk {i:02d} | score={chunk.get('score', 0):.4f} | "
+                    f"type={chunk.get('chunk_type', '?'):12s} | "
+                    f"page={str(chunk.get('page_number', '?')):4s} | "
+                    f"preview={chunk.get('content', '')[:60].replace(chr(10), ' ')}..."
                 )
-
+                
             return chunks
 
         except Exception as e:
-            raise RetrievalError(f"Retrieval failed: {e}")
+            raise RetrievalError(f"Retrieval failed for collection '{collection_name}': {e}")

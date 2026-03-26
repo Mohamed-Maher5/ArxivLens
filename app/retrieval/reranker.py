@@ -28,7 +28,7 @@ class Reranker:
             # Filter by threshold >= 6.0 instead of taking top_k
             scored_chunks = []
             for score, chunk in zip(scores, chunks):
-                if score >= 6.0:
+                if score >= settings.rerank_score_threshold:
                     chunk_copy = chunk.copy()
                     chunk_copy['rerank_score'] = score  # Store the LLM score
                     scored_chunks.append((score, chunk_copy))

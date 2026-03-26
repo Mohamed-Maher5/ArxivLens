@@ -5,17 +5,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"  # Allow extra env vars without errors
+        extra="ignore"
     )
-    
+
     # ── API Keys ───────────────────────────────────────────────
-    groq_api_key: str = ""                   # intent + reranker scoring
-    langsmith_api_key: str = ""              # LangSmith tracing
-    huggingface_api_key: str = ""            # answer generation only
+    groq_api_key: str = ""
+    langsmith_api_key: str = ""
+    huggingface_api_key: str = ""
 
     # ── LangSmith ─────────────────────────────────────────────
     langsmith_project: str = "arxiv-lens"
@@ -29,21 +29,22 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_url: str = ""
     qdrant_api_key: str = ""
-    qdrant_collection_name: str = "arxiv_papers"
+    # NOTE: qdrant_collection_name removed — collections are now dynamic per paper.
+    # Collection names are derived from paper IDs: paper_1706_03762
 
     # ── Models ────────────────────────────────────────────────
-    groq_classifier_model: str = "llama-3.1-8b-instant"  # intent + reranker
-    hf_model: str = "Qwen/Qwen3-8B"                      # answer generation
-    bge_model_name: str = "BAAI/bge-m3"                  # embeddings
-    vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"  # ingestion
+    groq_classifier_model: str = "llama-3.1-8b-instant"
+    hf_model: str = "Qwen/Qwen3-8B"
+    bge_model_name: str = "BAAI/bge-m3"
+    vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "phi3"  # contextualization & history
+    ollama_model: str = "phi3"
 
     # ── Retrieval ─────────────────────────────────────────────
-    chunk_size: int = 512
-    chunk_overlap: int = 50
+    chunk_size: int = 256
+    chunk_overlap: int = 30
     score_threshold: float = 0.3
-    max_history: int = 5
+    max_history: int = 6
     rerank_score_threshold: float = 6.0
     top_k_retrieval: int = 10
     top_k_rerank: int = 3
