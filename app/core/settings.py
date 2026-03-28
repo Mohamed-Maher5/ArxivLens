@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     langchain_tracing_v2: bool = True
     langchain_endpoint: str = "https://api.smith.langchain.com"
     langchain_api_key: str = ""
-    langchain_project: str = "arxiv-lens"
 
     # ── Qdrant ────────────────────────────────────────────────
     qdrant_host: str = "localhost"

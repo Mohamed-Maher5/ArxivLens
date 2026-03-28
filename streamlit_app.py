@@ -1,18 +1,67 @@
 """
-ArxivLens — Streamlit UI  v2
+ArxivLens — Streamlit UI  v2.1 (LangSmith Fixed)
 Pages  : Search → Processing → Chat
-Fixes  : status_ph uses unsafe_allow_html=True via placeholder.markdown()
-         Chat messages rendered inside st.chat_message() so HTML works
-         Content HTML-escaped before injection to prevent tag bleed
+Fixes  : Added explicit LangSmith client configuration with project_name
+         Added trace_id capture and propagation
+         Added Client.flush() to ensure traces are sent
+         Fixed environment variable handling for Streamlit context
 """
 import streamlit as st
 import time
 import sys
+import os
 from pathlib import Path
+from uuid import uuid4
+
 # ── Path setup ─────────────────────────────────────────────────────────────
 project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+# ── LangSmith imports (early) ──────────────────────────────────────────────
+from langsmith import traceable, Client
+from langsmith.run_trees import RunTree
+
+# ── Explicit LangSmith Client Configuration ──────────────────────────────
+# Initialize client BEFORE any traceable decorators to ensure proper configuration
+def get_langsmith_client():
+    """Initialize LangSmith client with explicit configuration from settings"""
+    try:
+        from app.core import settings
+        
+        # Debug: Print configuration (remove in production)
+        print(f"[LangSmith] Tracing V2: {settings.langchain_tracing_v2}")
+        print(f"[LangSmith] Project: {settings.langsmith_project}")
+        print(f"[LangSmith] Endpoint: {settings.langchain_endpoint}")
+        print(f"[LangSmith] API Key exists: {bool(settings.langchain_api_key)}")
+        
+        if not settings.langchain_tracing_v2:
+            st.warning("LangSmith tracing is disabled in settings")
+            return None
+            
+        if not settings.langchain_api_key:
+            st.error("LangSmith API key not configured")
+            return None
+            
+        client = Client(
+            api_key=settings.langchain_api_key,
+            api_url=settings.langchain_endpoint or "https://api.smith.langchain.com",
+        )
+        
+        # Set environment variables for the decorator to pick up
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+        os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+        
+        return client
+        
+    except Exception as e:
+        print(f"[LangSmith] Client initialization failed: {e}")
+        return None
+
+# Initialize global client
+LANGSMITH_CLIENT = get_langsmith_client()
+
 # ── Page config  (must be the very first Streamlit call) ──────────────────
 st.set_page_config(
     page_title="ArxivLens",
@@ -202,6 +251,55 @@ def _esc(text: str) -> str:
     )
 def _nl2br(text: str) -> str:
     return _esc(text).replace("\n", "<br>")
+
+def _langsmith_status():
+    """Get current LangSmith configuration status"""
+    try:
+        from app.core import settings
+        
+        enabled = settings.langchain_tracing_v2
+        project = settings.langsmith_project
+        endpoint = settings.langchain_endpoint
+        
+        # Check if client initialized successfully
+        client_status = "connected" if LANGSMITH_CLIENT else "disconnected"
+        
+        return {
+            "enabled": enabled,
+            "project": project,
+            "endpoint": endpoint,
+            "client_status": client_status
+        }
+    except Exception as e:
+        return {
+            "enabled": False,
+            "project": "unknown",
+            "endpoint": None,
+            "client_status": f"error: {e}"
+        }
+
+def _trace_badge_html():
+    s = _langsmith_status()
+
+    color = "var(--ok)" if s["enabled"] and s["client_status"] == "connected" else "var(--err)"
+    label = "TRACING ON" if s["enabled"] and s["client_status"] == "connected" else "TRACING OFF"
+    status_detail = f" ({s['client_status']})" if not s["enabled"] else ""
+
+    return f"""
+    <div style="
+        display:flex; align-items:center; gap:.5rem;
+        font-size:.6rem; letter-spacing:.14em;
+        text-transform:uppercase;
+        color:{color};
+    ">
+        <div style="
+            width:6px;height:6px;border-radius:50%;
+            background:{color};
+            box-shadow:0 0 6px {color};
+        "></div>
+        LangSmith · {label}{status_detail} · {s["project"]}
+    </div>
+    """
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED HEADER
 # ══════════════════════════════════════════════════════════════════════════
@@ -378,6 +476,65 @@ def _steps_html(done: int, active: int) -> str:
         </div>"""
     html += "</div>"
     return html
+
+# Get project name from settings for decorator
+try:
+    from app.core import settings
+    LANGSMITH_PROJECT_NAME = settings.langsmith_project or "arxiv-lens"
+except:
+    LANGSMITH_PROJECT_NAME = "arxiv-lens"
+
+@traceable(
+    run_type="chain", 
+    name="process_paper_pipeline",
+    project_name=LANGSMITH_PROJECT_NAME,
+    client=LANGSMITH_CLIENT if LANGSMITH_CLIENT else None
+)
+def process_paper_pipeline(paper, show_callback):
+    """Wrapped pipeline for LangSmith tracing with explicit project configuration"""
+    import json
+    from app.ingestion.arxiv_fetcher    import ArxivFetcher
+    from app.ingestion.pdf_parser       import PDFParser
+    from app.ingestion.vision_processor import VisionProcessor
+    from app.indexing.chunker           import Chunker
+    from app.indexing.embedder          import Embedder
+    from app.indexing.vector_store      import VectorStore
+    
+    DATA_PROCESSED = Path("data/processed")
+    DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    
+    show_callback(0, 0, 0/6, "Downloading PDF from ArXiv…")
+    paper_obj = ArxivFetcher().download_pdf(paper)
+    
+    show_callback(1, 1, 1/6, "Parsing PDF structure…")
+    parsed = PDFParser().parse(paper_obj)
+    
+    show_callback(2, 2, 2/6, "Describing figures with vision model…")
+    parsed = VisionProcessor().process(parsed)
+    
+    with open(DATA_PROCESSED / f"{paper_obj.paper_id}.json", "w") as f:
+        json.dump(parsed, f, indent=2)
+    
+    show_callback(3, 3, 3/6, "Creating semantic chunks…")
+    chunks = Chunker().chunk(parsed)
+    
+    show_callback(4, 4, 4/6, "Computing dense + sparse embeddings…")
+    embedded = Embedder().embed_chunks(chunks)
+    
+    show_callback(5, 5, 5/6, "Indexing into Qdrant vector store…")
+    VectorStore(parsed["paper_id"]).store(embedded)
+    
+    show_callback(6, -1, 1.0, "✓  All steps complete — launching chat…", color="var(--ok)")
+    
+    # Ensure trace is flushed to LangSmith
+    if LANGSMITH_CLIENT:
+        try:
+            LANGSMITH_CLIENT.flush()
+        except Exception as e:
+            print(f"[LangSmith] Flush warning: {e}")
+    
+    return parsed["paper_id"]
+
 def page_processing() -> None:
     render_header()
     paper = st.session_state.selected
@@ -413,31 +570,8 @@ def page_processing() -> None:
             unsafe_allow_html=True,
         )
     try:
-        import json
-        from app.ingestion.arxiv_fetcher    import ArxivFetcher
-        from app.ingestion.pdf_parser       import PDFParser
-        from app.ingestion.vision_processor import VisionProcessor
-        from app.indexing.chunker           import Chunker
-        from app.indexing.embedder          import Embedder
-        from app.indexing.vector_store      import VectorStore
-        DATA_PROCESSED = Path("data/processed")
-        DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
-        show(0, 0, 0/6, "Downloading PDF from ArXiv…")
-        paper_obj = ArxivFetcher().download_pdf(paper)
-        show(1, 1, 1/6, "Parsing PDF structure…")
-        parsed = PDFParser().parse(paper_obj)
-        show(2, 2, 2/6, "Describing figures with vision model…")
-        parsed = VisionProcessor().process(parsed)
-        with open(DATA_PROCESSED / f"{paper_obj.paper_id}.json", "w") as f:
-            json.dump(parsed, f, indent=2)
-        show(3, 3, 3/6, "Creating semantic chunks…")
-        chunks = Chunker().chunk(parsed)
-        show(4, 4, 4/6, "Computing dense + sparse embeddings…")
-        embedded = Embedder().embed_chunks(chunks)
-        show(5, 5, 5/6, "Indexing into Qdrant vector store…")
-        VectorStore(parsed["paper_id"]).store(embedded)
-        show(6, -1, 1.0, "✓  All steps complete — launching chat…", color="var(--ok)")
-        st.session_state.paper_id = parsed["paper_id"]
+        paper_id = process_paper_pipeline(paper, show)
+        st.session_state.paper_id = paper_id
         time.sleep(1.3)
         st.session_state.page = "chat"
         st.rerun()
@@ -452,6 +586,29 @@ def page_processing() -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE 3 — CHAT
 # ══════════════════════════════════════════════════════════════════════════
+
+@traceable(
+    run_type="llm", 
+    name="chat_query",
+    project_name=LANGSMITH_PROJECT_NAME,
+    client=LANGSMITH_CLIENT if LANGSMITH_CLIENT else None
+)
+def run_traced_pipeline(prompt, history_msgs, paper_id):
+    """Wrapper to trace the generation pipeline with explicit project configuration"""
+    from app.generation import run_pipeline
+    from app.models.schemas import Message
+    
+    result = run_pipeline(prompt, history_msgs, paper_id)
+    
+    # Ensure trace is flushed to LangSmith
+    if LANGSMITH_CLIENT:
+        try:
+            LANGSMITH_CLIENT.flush()
+        except Exception as e:
+            print(f"[LangSmith] Flush warning: {e}")
+    
+    return result
+
 def page_chat() -> None:
     render_header(show_back=True)
     paper    = st.session_state.selected
@@ -460,24 +617,30 @@ def page_chat() -> None:
     title_short = paper.title[:80] + ("…" if len(paper.title) > 80 else "")
     # status bar
     st.markdown(f"""
-    <div style="
-        background:var(--bg1); border-bottom:1px solid var(--border);
-        padding:.55rem 2.5rem; display:flex; align-items:center; gap:.8rem;
-    ">
         <div style="
-            width:7px; height:7px; border-radius:50%;
-            background:var(--ok); flex-shrink:0;
-            box-shadow:0 0 7px var(--ok);
-        "></div>
-        <div style="
-            font-size:.67rem; color:var(--dim); letter-spacing:.05em;
-            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+            background:var(--bg1); border-bottom:1px solid var(--border);
+            padding:.55rem 2.5rem;
+            display:flex; align-items:center; justify-content:space-between;
+            gap:.8rem;
         ">
-            <span style="color:var(--accent);font-weight:700;">{_esc(paper_id)}</span>
-            &nbsp;·&nbsp;
-            <span style="color:var(--text);">{_esc(title_short)}</span>
-            &nbsp;·&nbsp;{_esc(authors_str)}
+        <div style="display:flex; align-items:center; gap:.8rem;">
+            <div style="
+                width:7px; height:7px; border-radius:50%;
+                background:var(--ok); flex-shrink:0;
+                box-shadow:0 0 7px var(--ok);
+            "></div>
+            <div style="
+                font-size:.67rem; color:var(--dim); letter-spacing:.05em;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+            ">
+                <span style="color:var(--accent);font-weight:700;">{_esc(paper_id)}</span>
+                &nbsp;·&nbsp;
+                <span style="color:var(--text);">{_esc(title_short)}</span>
+                &nbsp;·&nbsp;{_esc(authors_str)}
+            </div>
         </div>
+
+        {_trace_badge_html()}
     </div>
     """, unsafe_allow_html=True)
     # empty state
@@ -516,16 +679,27 @@ def page_chat() -> None:
                 unsafe_allow_html=True,
             )
             try:
-                from app.generation import run_pipeline
                 from app.models.schemas import Message
+                
                 history_msgs = st.session_state.history_msgs
-                result = run_pipeline(prompt, history_msgs, paper_id)
+                
+                # Use traced pipeline
+                result = run_traced_pipeline(prompt, history_msgs, paper_id)
+                
                 history_msgs.append(Message(role="user",      content=prompt))
                 history_msgs.append(Message(role="assistant", content=result["answer"]))
                 if len(history_msgs) > 12:
                     history_msgs = history_msgs[-12:]
                 st.session_state.history_msgs = history_msgs
-                meta = {"confidence": result.get("confidence", ""), "sources": result.get("sources", [])}
+                
+                # Capture trace_id if available in result
+                trace_id = result.get("trace_id") if isinstance(result, dict) else None
+                
+                meta = {
+                    "confidence": result.get("confidence", ""), 
+                    "sources": result.get("sources", []),
+                    "trace_id": trace_id
+                }
                 thinking_ph.empty()
                 _render_assistant_bubble(result["answer"], meta)
                 st.session_state.chat_history.append(
@@ -569,6 +743,16 @@ def _render_assistant_bubble(content: str, meta) -> None:
         f"padding:.12rem .4rem;border-radius:1px;margin-left:.6rem;'>{conf}</span>"
     ) if conf else ""
     sources_html = ""
+    trace_id = (meta or {}).get("trace_id")
+
+    trace_html = ""
+    if trace_id:
+        trace_url = f"https://smith.langchain.com/public/{trace_id}"
+        trace_html = f"""
+        <div style='margin-top:.6rem;font-size:.6rem;color:#9ca3af;'>
+            Trace: <a href="{trace_url}" target="_blank" style="color:#60a5fa;">view run</a>
+        </div>
+        """
     if meta and meta.get("sources"):
         rows = ""
         for s in (meta["sources"])[:3]:
@@ -608,6 +792,7 @@ def _render_assistant_bubble(content: str, meta) -> None:
         ">⬡ &nbsp;ARXIVLENS{badge}</div>
         <div>{_nl2br(content)}</div>
         {sources_html}
+        {trace_html}
     </div>
     """, unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════
