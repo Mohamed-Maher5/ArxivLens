@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 30
     score_threshold: float = 0.3
     max_history: int = 6
-    rerank_score_threshold: float = 6.0
+    rerank_score_threshold: float = 7.0
     top_k_retrieval: int = 10
     top_k_rerank: int = 3
 

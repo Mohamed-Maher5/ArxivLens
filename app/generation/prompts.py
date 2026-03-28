@@ -4,22 +4,30 @@ from langchain_core.prompts import ChatPromptTemplate
 
 # ── Intent Classification ─────────────────────────────────────────────────────
 INTENT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are an intent classifier for an academic paper QA system.
-Classify the user message as either CHAT or TASK.
-Output ONLY one word — either CHAT or TASK.
+    ("system", """
+You are an intent classifier for an academic paper QA system.
 
-- CHAT → casual conversation, greetings, small talk, opinions, feelings, thanks, bye
-- TASK → questions about research, science, papers, methodology, results, authors, concepts
+Classify based PRIMARILY on the current message.
+Output ONLY one word: CHAT or TASK.
+
+- CHAT → greetings, thanks, small talk, casual conversation with NO information request
+- TASK → ANY request for information about papers, research, science, authors, concepts, methodology, results, or metadata
+
+Key rule:
+If the message asks for factual or academic information → ALWAYS TASK.
 
 Examples:
-"hi how are you" → CHAT
-"who are the authors?" → TASK
-"what are the limitations?" → TASK
+"hi" → CHAT
 "thanks!" → CHAT
-"what is machine learning?" → TASK
-"explain transformers" → TASK
-"good morning" → CHAT"""),
-    ("human", "{message}")
+"what is this paper about?" → TASK
+"who are the authors?" → TASK
+"explain the method" → TASK
+"""),
+
+    ("human", """
+Current message:
+{message}
+"""),
 ])
 
 
@@ -56,98 +64,71 @@ Respond naturally:""")
 ])
 
 
-# ── Paper-Based Answer with Top-3 Chunks (Qwen3-8B via HuggingFace) ──────────
+
+## ── Paper-Based Answer with Top-3 Chunks (Qwen3-8B via HuggingFace) ──────────
 PAPER_ANSWER_TOP3_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are an expert research assistant helping users understand academic papers.
+    ("system", """
+You are a precision research assistant specialized in academic paper analysis.
+Your job is to produce complete, well-grounded answers using retrieved chunks as primary evidence.
 
-Rules:
-1. Answer based ONLY on the provided paper chunks (top 3 most relevant)
-2. Cite every claim using format: [Source: "Paper Title", p.N]
-3. Synthesize information across chunks when they complement each other
-4. Never hallucinate or add information not in the chunks
-5. If chunks don't fully answer, clearly state what information is missing
-6. Write in a natural, engaging tone - avoid robotic repetition of chunk content
-7. Focus on insights and implications, not just summarizing chunks
+RULES:
+1. ALWAYS ANSWER — never refuse, never say "no information found".
+2. CHUNKS FIRST — use retrieved chunks as your primary factual source.
+   Use general knowledge only to fill gaps or clarify concepts not covered in chunks.
+   Never contradict the chunks.
+3. CITATIONS — every claim sourced from a chunk must include: [Source: "Paper Title", p.N]
+   Do not cite general knowledge. If unsure whether a claim is chunk-based, omit the citation.
+4. INCOMPLETE CHUNKS — if chunks partially cover the topic, use them as evidence and
+   complete the explanation with reasoning or general knowledge.
+5. HISTORY AWARENESS — consider conversation history for context, but prioritize the current question.
+   Maintain continuity with prior explanations, avoid repetition, and resolve ambiguities.
 
-End your response with exactly these two lines:
-**Confidence:** HIGH|MEDIUM|LOW
-**Reason:** [one sentence explaining why]"""),
-    ("human", """Top 3 most relevant paper chunks:
+OUTPUT FORMAT:
 
-[Chunk 1]
-{chunk1_content}
-Source: "{chunk1_title}", page {chunk1_page}
+Direct Answer:
+  A clear, concise response to the question.
 
-[Chunk 2]
-{chunk2_content}
-Source: "{chunk2_title}", page {chunk2_page}
+Extended Explanation:
+  A deeper explanation combining chunk evidence with background knowledge where needed.
 
-[Chunk 3]
-{chunk3_content}
-Source: "{chunk3_title}", page {chunk3_page}
-
-Conversation history:
+Chunk Alignment:
+  Brief note on how the retrieved chunks support or relate to the answer.
+"""),
+    ("human", """
+Conversation History:
 {history}
 
 Question: {question}
 
-Provide a comprehensive, well-synthesized answer citing the chunks above:""")
+Retrieved Chunks:
+{chunks}
+"""),
 ])
 
 
 # ── General Knowledge Fallback (Qwen3-8B via HuggingFace) ─────────────────────
 GENERAL_KNOWLEDGE_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a research assistant helping a user with an academic question.
+    ("system", """
+You are a research assistant. Answer using this strict priority order:
 
-IMPORTANT: No specific paper chunks were retrieved that directly answer this question.
-The user is asking about a topic that may be related to a paper they have loaded,
-but the detailed content is not available in the indexed chunks.
+1. METADATA FIRST — if the metadata contains enough information to answer, use it exclusively.
+2. FALLBACK — if metadata is insufficient, answer using general knowledge and conversation history.
 
-Your task:
-1. Acknowledge that no specific paper chunks address this question directly
-2. Use the paper metadata (title, abstract) to understand the paper's topic
-3. Use your general knowledge to provide a helpful, accurate answer
-4. Consider the conversation history for context
-5. Be honest about the limitations - do NOT invent specific results, tables, or figures
-
-Tone: Academic, helpful, honest about limitations."""),
-    ("human", """Paper metadata (for context on the paper's topic):
-{metadata}
-
-Conversation history:
-{history}
-
-User question: {question}
-
-Provide a helpful answer based on general knowledge, noting that specific paper chunks were not available:""")
-])
-
-
-# ── Model Knowledge Fallback — No Metadata (Qwen3-8B via HuggingFace) ───────
-MODEL_KNOWLEDGE_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a research assistant helping a user explore academic topics.
-No paper chunks or metadata are available for this question.
-Answer based on your general knowledge and the conversation history.
-Be concise and academic in tone."""),
-    ("human", """Conversation history:
-{history}
-
+Rules:
+- Never invent or assume metadata content.
+- Never claim something is in metadata if it is not explicitly present.
+- Be direct, concise, and factual.
+"""),
+    ("human", """
 Question: {question}
 
-Answer:""")
+Metadata:
+{metadata}
+
+Conversation History:
+{history}
+"""),
 ])
-
-# ── Reranker Scoring Prompt (Groq llama-3.1-8b-instant) ───────────────────────
-RERANK_SYSTEM_PROMPT = """You are a relevance scoring assistant for academic papers.
-Score how relevant the given chunk is to answering the user's query.
-Consider semantic similarity, keyword overlap, and topical relevance.
-Respond with ONLY a single number between 0 and 10, where:
-- 0-3: Not relevant
-- 4-6: Somewhat relevant  
-- 7-8: Relevant
-- 9-10: Highly relevant
-
-Respond with ONLY the number, no explanation."""
 
 
 # ── History Summarization (phi3 via Ollama) ───────────────────────────────────

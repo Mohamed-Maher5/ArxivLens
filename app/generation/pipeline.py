@@ -154,7 +154,6 @@ class Pipeline:
             question=question,
             answer=answer,
             sources=[],
-            confidence="HIGH",
             contextualized_query=question
         )
 
@@ -242,7 +241,7 @@ class Pipeline:
     def _rerank_chunks(self, contextualized: str, chunks: list) -> list:
         """
         Rerank chunks and return only those passing threshold.
-        Reranker already filters by score >= 6.0
+        Reranker already filters by score > 2.0
         """
         reranked = self.reranker.rerank(contextualized, chunks)
         logger.info(f"[RERANK] {len(reranked)} chunks passed threshold")
@@ -263,7 +262,6 @@ class Pipeline:
             question=question,
             answer=result["answer"],
             sources=self._chunks_to_schema(chunks),
-            confidence=result["confidence"],
             contextualized_query=question
         )
 
@@ -282,7 +280,6 @@ class Pipeline:
             question=question,
             answer=result["answer"],
             sources=[],  # No specific chunks to cite
-            confidence=result["confidence"],
             contextualized_query=question
         )
 

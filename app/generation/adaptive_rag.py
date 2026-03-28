@@ -123,8 +123,8 @@ class AdaptiveRAG:
         history_text: str
     ) -> dict:
         """
-        Generate answer from top 3 paper chunks with history.
-        
+        Generate answer from top 3 paper chunks with history consideration.
+    
         Args:
             question: Original user question
             chunks: List of top reranked chunks (should be 3 or fewer)
@@ -144,30 +144,42 @@ class AdaptiveRAG:
                 chunk_vars[f"chunk{i}_title"] = "N/A"
                 chunk_vars[f"chunk{i}_page"] = "N/A"
 
+            # Format chunks for the prompt
+            formatted_chunks = self._format_chunks_for_prompt(chunks[:3])
+            
             answer = self._hf_with_prompt(
                 prompts.PAPER_ANSWER_TOP3_PROMPT,
                 {
-                    **chunk_vars,
-                    "history": history_text,
-                    "question": question
+                    "question": question,
+                    "chunks": formatted_chunks,
+                    "history": history_text,  # Now properly passed to prompt
+                    **chunk_vars  # Individual chunk variables for citation formatting
                 },
                 max_tokens=1024
             )
-            
+        
             return {
                 "answer": answer,
-                "confidence": self._parse_confidence(answer),
-                "source": "paper"
+                "source": "paper",
             }
-            
+        
         except Exception as e:
             logger.error(f"[GENERATE] Paper top3 answer failed: {e}")
             return {
                 "answer": "I couldn't generate an answer from the paper chunks.",
-                "confidence": "LOW",
                 "source": "paper"
             }
 
+    def _format_chunks_for_prompt(self, chunks: list[dict]) -> str:
+        """Format chunks into readable string for the prompt."""
+        formatted = []
+        for i, chunk in enumerate(chunks, 1):
+            title = chunk.get("paper_title", "Unknown Paper")
+            page = chunk.get("page_number", "?")
+            content = chunk.get("content", "")
+            formatted.append(f"[Chunk {i}] Source: \"{title}\", page {page}\n{content[:500]}")
+        return "\n\n".join(formatted)
+    
     def generate_general_knowledge(
         self,
         question: str,
@@ -180,38 +192,17 @@ class AdaptiveRAG:
         """
         try:
             # If we have metadata, use the grounded prompt
-            if metadata and len(metadata) > 50:
-                answer = self._hf_with_prompt(
-                    prompts.GENERAL_KNOWLEDGE_PROMPT,
-                    {
-                        "metadata": metadata,
-                        "history": history_text,
-                        "question": question
-                    },
-                    max_tokens=1024
-                )
-                confidence = "MEDIUM"
-                reason = "Answer based on paper metadata and general knowledge (no specific chunks retrieved)"
-            else:
-                # No metadata either, pure fallback
-                answer = self._hf_with_prompt(
-                    prompts.MODEL_KNOWLEDGE_FALLBACK_PROMPT,
-                    {
-                        "history": history_text,
-                        "question": question
-                    },
-                    max_tokens=512
-                )
-                confidence = "MEDIUM"
-                reason = "Answer based on general knowledge (no paper data available)"
-
-            # Ensure confidence tag exists
-            if "**Confidence:**" not in answer:
-                answer += f"\n\n**Confidence:** {confidence}\n**Reason:** {reason}"
-
+            answer = self._hf_with_prompt(
+                prompts.GENERAL_KNOWLEDGE_PROMPT,
+                {
+                    "metadata": metadata,
+                    "history": history_text,
+                    "question": question
+                },
+                max_tokens=1024
+            )
             return {
                 "answer": answer,
-                "confidence": self._parse_confidence(answer),
                 "source": "general_knowledge"
             }
             
@@ -219,7 +210,6 @@ class AdaptiveRAG:
             logger.error(f"[GENERATE] General knowledge answer failed: {e}")
             return {
                 "answer": f"I don't have specific information to answer this question. {str(e)}",
-                "confidence": "LOW",
                 "source": "general_knowledge"
             }
 
@@ -228,8 +218,3 @@ class AdaptiveRAG:
     def _clean(self, text: str) -> str:
         """Remove thinking tags and clean output."""
         return re.sub(r"thinking.*?/thinking", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-
-    def _parse_confidence(self, answer: str) -> str:
-        """Extract confidence level from answer."""
-        match = re.search(r"(HIGH|MEDIUM|LOW)", answer, re.IGNORECASE)
-        return match.group(1).upper() if match else "MEDIUM"

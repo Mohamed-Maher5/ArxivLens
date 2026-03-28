@@ -12,9 +12,6 @@ def run_pipeline(question: str, history: list = None, paper_id: str = None) -> d
         question: The user's question
         history: Optional list of Message objects for conversation history
         paper_id: Optional specific paper ID to scope the search
-        
-    Returns:
-        Dict with answer, confidence, sources, etc.
     """
     if history is None:
         history = []
@@ -26,7 +23,6 @@ def run_pipeline(question: str, history: list = None, paper_id: str = None) -> d
         return {
             "question": result.question,
             "answer": result.answer,
-            "confidence": result.confidence,
             "contextualized_query": result.contextualized_query,
             "sources": [
                 {
@@ -44,7 +40,6 @@ def run_pipeline(question: str, history: list = None, paper_id: str = None) -> d
         return {
             "question": question,
             "answer": f"Sorry, I encountered an error: {str(e)}",
-            "confidence": "LOW",
             "contextualized_query": question,
             "sources": []
         }

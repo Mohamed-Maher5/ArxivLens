@@ -30,7 +30,6 @@ class QueryResult(BaseModel):
     question: str
     answer: str
     sources: list[Chunk]
-    confidence: str
     contextualized_query: str
     timestamp: datetime = Field(default_factory=datetime.now)
 
