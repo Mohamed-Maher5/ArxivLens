@@ -64,7 +64,9 @@ User Query
 │                 General knowledge (Qwen3-8B)    │
 └─────────────────────────────────────────────────┘
 ```
-
+<br>
+<img width="769" height="937" alt="Screenshot from 2026-03-29 21-04-01" src="https://github.com/user-attachments/assets/899bca0b-aa99-4d57-a96a-09ff76166dfb" />
+<br>
 ---
 
 ## Tech Stack
@@ -322,3 +324,6 @@ arxivlens/
 - Each paper gets its own Qdrant collection (`paper_{arxiv_id}`), so multiple papers can be indexed independently without collision.
 - History is managed automatically: up to 6 messages are kept in full; older messages are summarized by phi3 into 2–3 sentences to keep context without overflowing the prompt.
 - The reranker uses an **answerability** score (not similarity) — a chunk must score above 6.0/10 to be used in generation. This significantly reduces hallucination from tangentially related chunks.
+
+
+
