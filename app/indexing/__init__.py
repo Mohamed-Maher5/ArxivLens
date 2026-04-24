@@ -1,5 +1,6 @@
 from app.indexing.chunker import Chunker
 from app.indexing.embedder import Embedder
+from app.indexing.local_embedder import LocalEmbedder
 from app.indexing.vector_store import VectorStore
 from app.core.logger import logger
 from app.core.exceptions import ArxivLensException
@@ -7,13 +8,13 @@ from app.models.schemas import Chunk
 
 
 def index_paper(parsed_result: dict) -> list[Chunk]:
-    paper_id = parsed_result["paper_id"]
+    arxiv_id = parsed_result["arxiv_id"]
     chunker = Chunker()
     embedder = Embedder()
-    # VectorStore now receives paper_id to derive the per-paper collection name.
-    store = VectorStore(paper_id=paper_id)
+    # VectorStore now receives arxiv_id to derive the per-paper collection name.
+    store = VectorStore(arxiv_id=arxiv_id)
     try:
-        logger.info(f"Starting indexing for: {paper_id}")
+        logger.info(f"Starting indexing for: {arxiv_id}")
         chunks = chunker.chunk(parsed_result)
         embedded = embedder.embed_chunks(chunks)
         store.store(embedded)

@@ -16,16 +16,16 @@ def ingest_paper(paper: Paper) -> dict:
     parser = PDFParser()
     vision = VisionProcessor()
     try:
-        logger.info(f"Starting ingestion for: {paper.paper_id}")
+        logger.info(f"Starting ingestion for: {paper.arxiv_id}")
         paper = fetcher.download_pdf(paper)
         parsed = parser.parse(paper)
         parsed = vision.process(parsed)
-        output_path = DATA_PROCESSED / f"{paper.paper_id}.json"
+        output_path = DATA_PROCESSED / f"{paper.arxiv_id}.json"
         with open(output_path, "w") as f:
             json.dump(parsed, f, indent=2)
-        logger.info(f"Ingestion complete: {paper.paper_id}")
+        logger.info(f"Ingestion complete: {paper.arxiv_id}")
         return parsed
     except ArxivLensException:
         raise
     except Exception as e:
-        raise ArxivLensException(f"Ingestion failed for {paper.paper_id}: {e}")
+        raise ArxivLensException(f"Ingestion failed for {paper.arxiv_id}: {e}")

@@ -1,8 +1,4 @@
-# /mnt/hdd/projects/ArxivLens/test_complete_pipeline.py
-"""
-Complete End-to-End ArxivLens Test
-Uses public APIs from each module's __init__
-"""
+"""Interactive local demo for the ArxivLens pipeline."""
 
 import sys
 from pathlib import Path
@@ -11,11 +7,9 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Public APIs from each module's __init__
 from app.ingestion import ArxivFetcher, ingest_paper
 from app.indexing import Chunker, Embedder, VectorStore
 from app.generation import run_pipeline
-from app.models.schemas import Message
 from app.core.logger import logger
 
 
@@ -43,7 +37,7 @@ def search_papers_interactive():
     
     for i, paper in enumerate(papers, 1):
         print(f"  [{i}] {paper.title}")
-        print(f"      ID: {paper.paper_id}")
+        print(f"      ID: {paper.arxiv_id}")
         print(f"      Authors: {', '.join(paper.authors[:2])}{' et al.' if len(paper.authors) > 2 else ''}")
         print(f"      Published: {paper.published}")
         print()
@@ -83,7 +77,7 @@ def ingest_and_index(paper):
     
     try:
         # 3.1: Ingest (fetch + parse)
-        print(f"\n⬇️  Fetching and parsing paper {paper.paper_id}...")
+        print(f"\n⬇️  Fetching and parsing paper {paper.arxiv_id}...")
         parsed_result = ingest_paper(paper)
         print(f"   ✅ Parsed: {len(parsed_result.get('pages', []))} pages")
         
@@ -101,11 +95,11 @@ def ingest_and_index(paper):
         
         # 3.4: Store in Qdrant
         print("\n💾 Storing in Qdrant...")
-        store = VectorStore(parsed_result['paper_id'])
+        store = VectorStore(parsed_result['arxiv_id'])
         store.store(embedded_chunks)
-        print(f"   ✅ Indexed to collection: paper_{paper.paper_id}")
+        print(f"   ✅ Indexed to collection: paper_{paper.arxiv_id}")
         
-        return parsed_result['paper_id']
+        return parsed_result['arxiv_id']
         
     except Exception as e:
         logger.error(f"Ingest/index failed: {e}")
@@ -115,15 +109,13 @@ def ingest_and_index(paper):
         return None
 
 
-def chat_loop(paper_id):
+def chat_loop(arxiv_id):
     """Step 4: Interactive chat with the paper."""
     print("\n" + "="*70)
     print("💬 STEP 4: Chat with Paper")
     print("="*70)
-    print(f"Paper ID: {paper_id}")
+    print(f"Paper ID: {arxiv_id}")
     print("Type your questions or 'exit' to finish.\n")
-    
-    history = []
     
     while True:
         user_input = input("You: ").strip()
@@ -135,26 +127,16 @@ def chat_loop(paper_id):
         if not user_input:
             continue
         try:
-            # Run pipeline with history
-            result = run_pipeline(user_input, history, paper_id)
+            result = run_pipeline(user_input, arxiv_id)
             
             # Display response
             print(f"\nArxivLens: {result['answer']}")
-            print(f"   [Confidence: {result['confidence']}]")
             
             if result['sources']:
                 print(f"   [Sources: {len(result['sources'])} chunks]")
                 for i, src in enumerate(result['sources'][:2], 1):
                     print(f"      - {src['paper_title']}, p.{src['page_number']}")
-            
-            # Update history
-            history.append(Message(role="user", content=user_input))
-            history.append(Message(role="assistant", content=result['answer']))
-            
-            # Keep history manageable (last 12 = 6 exchanges, will be summarized internally)
-            if len(history) > 12:
-                history = history[-12:]
-            
+
             print()
             
         except Exception as e:
@@ -180,13 +162,13 @@ def main():
         sys.exit(0)
     
     # Step 3: Ingest & Index
-    paper_id = ingest_and_index(selected)
-    if not paper_id:
+    arxiv_id = ingest_and_index(selected)
+    if not arxiv_id:
         print("❌ Failed to process paper.")
         sys.exit(1)
     
     # Step 4: Chat
-    chat_loop(paper_id)
+    chat_loop(arxiv_id)
     
     print("\n" + "█"*70)
     print("█" + " "*20 + "TEST COMPLETED" + " "*26 + "█")

@@ -27,7 +27,7 @@ class ArxivFetcher:
             for result in self.client.results(search):
                 # ABSTRACT STORED AS-IS (no summarization)
                 paper = Paper(
-                    paper_id=result.entry_id.split("/")[-1],
+                    arxiv_id=result.entry_id.split("/")[-1],
                     title=result.title,
                     authors=[a.name for a in result.authors],
                     abstract=result.summary, 
@@ -42,17 +42,17 @@ class ArxivFetcher:
             raise ArxivFetchError(f"Search failed for query '{query}': {e}")
 
     def download_pdf(self, paper: Paper, max_retries: int = 3) -> Paper:
-        logger.info(f"Attempting download for: {paper.paper_id}")
-        pdf_path = DATA_RAW / f"{paper.paper_id}.pdf"
+        logger.info(f"Attempting download for: {paper.arxiv_id}")
+        pdf_path = DATA_RAW / f"{paper.arxiv_id}.pdf"
         
         for attempt in range(max_retries):
             try:
-                search = arxiv.Search(id_list=[paper.paper_id])
+                search = arxiv.Search(id_list=[paper.arxiv_id])
                 result = next(self.client.results(search))
                 
                 result.download_pdf(
                     dirpath=str(DATA_RAW),
-                    filename=f"{paper.paper_id}.pdf"
+                    filename=f"{paper.arxiv_id}.pdf"
                 )
                 
                 paper.pdf_path = str(pdf_path)
@@ -70,14 +70,14 @@ class ArxivFetcher:
 
         raise ArxivFetchError("Download failed after multiple retries due to ArXiv rate limits.")
 
-    def fetch_by_id(self, paper_id: str) -> Paper:
-        logger.info(f"Fetching paper by ID: {paper_id}")
+    def fetch_by_id(self, arxiv_id: str) -> Paper:
+        logger.info(f"Fetching paper by ID: {arxiv_id}")
         try:
-            search = arxiv.Search(id_list=[paper_id])
+            search = arxiv.Search(id_list=[arxiv_id])
             result = next(self.client.results(search))
             # ABSTRACT STORED AS-IS (no summarization)
             paper = Paper(
-                paper_id=paper_id,
+                arxiv_id=arxiv_id,
                 title=result.title,
                 authors=[a.name for a in result.authors],
                 abstract=result.summary,  # Raw abstract from arXiv
@@ -87,4 +87,4 @@ class ArxivFetcher:
             logger.info(f"Fetched: {paper.title[:60]}...")
             return paper
         except Exception as e:
-            raise ArxivFetchError(f"Fetch by ID failed for {paper_id}: {e}")
+            raise ArxivFetchError(f"Fetch by ID failed for {arxiv_id}: {e}")

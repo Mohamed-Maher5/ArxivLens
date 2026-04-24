@@ -17,10 +17,10 @@ class Chunker:
         logger.info("Chunker initialized")
 
     def chunk(self, parsed_result: dict) -> list[Chunk]:
-        logger.info(f"Chunking paper: {parsed_result['paper_id']}")
+        logger.info(f"Chunking paper: {parsed_result['arxiv_id']}")
         try:
             chunks = []
-            paper_id = parsed_result["paper_id"]
+            arxiv_id = parsed_result["arxiv_id"]
             title = parsed_result["title"]
             authors = parsed_result["authors"]
 
@@ -29,7 +29,7 @@ class Chunker:
             for page in parsed_result.get("pages", []):
                 page_chunks = self._chunk_content(
                     page["text"],
-                    paper_id,
+                    arxiv_id,
                     title,
                     authors,
                     page["page_number"]
@@ -39,12 +39,12 @@ class Chunker:
             for image in parsed_result.get("images", []):
                 if image.get("description"):
                     chunks.append(self._make_figure_chunk(
-                        image, paper_id, title, authors
+                        image, arxiv_id, title, authors
                     ))
 
             for table in parsed_result.get("tables", []):
                 chunks.append(self._make_table_chunk(
-                    table, paper_id, title, authors
+                    table, arxiv_id, title, authors
                 ))
 
             if parsed_result.get("references"):
@@ -53,20 +53,20 @@ class Chunker:
                 references_page = parsed_result.get("references_page")
                 chunks.append(self._make_references_chunk(
                     parsed_result["references"],
-                    paper_id, title, authors,
+                    arxiv_id, title, authors,
                     references_page
                 ))
 
-            logger.info(f"Created {len(chunks)} chunks for {paper_id}")
+            logger.info(f"Created {len(chunks)} chunks for {arxiv_id}")
             return chunks
 
         except Exception as e:
-            raise ChunkingError(f"Chunking failed for {parsed_result['paper_id']}: {e}")
+            raise ChunkingError(f"Chunking failed for {parsed_result['arxiv_id']}: {e}")
 
     def _make_abstract_chunk(self, parsed_result: dict) -> Chunk:
         return Chunk(
             chunk_id=str(uuid.uuid4()),
-            paper_id=parsed_result["paper_id"],
+            arxiv_id=parsed_result["arxiv_id"],
             paper_title=parsed_result["title"],
             authors=parsed_result["authors"],
             content=parsed_result["abstract"],
@@ -74,7 +74,7 @@ class Chunker:
             page_number=1
         )
 
-    def _chunk_content(self, text: str, paper_id: str, title: str,
+    def _chunk_content(self, text: str, arxiv_id: str, title: str,
                        authors: list, page_number: int) -> list[Chunk]:
         chunks = []
         texts = self.splitter.split_text(text)
@@ -82,7 +82,7 @@ class Chunker:
             if t.strip():
                 chunks.append(Chunk(
                     chunk_id=str(uuid.uuid4()),
-                    paper_id=paper_id,
+                    arxiv_id=arxiv_id,
                     paper_title=title,
                     authors=authors,
                     content=t.strip(),
@@ -91,14 +91,14 @@ class Chunker:
                 ))
         return chunks
 
-    def _make_figure_chunk(self, image: dict, paper_id: str,
+    def _make_figure_chunk(self, image: dict, arxiv_id: str,
                            title: str, authors: list) -> Chunk:
         content = image["description"]
         if image.get("caption"):
             content = f"Caption: {image['caption']}\n\n{content}"
         return Chunk(
             chunk_id=str(uuid.uuid4()),
-            paper_id=paper_id,
+            arxiv_id=arxiv_id,
             paper_title=title,
             authors=authors,
             content=content,
@@ -108,14 +108,14 @@ class Chunker:
             figure_description=image["description"]
         )
 
-    def _make_table_chunk(self, table: dict, paper_id: str,
+    def _make_table_chunk(self, table: dict, arxiv_id: str,
                           title: str, authors: list) -> Chunk:
         content = table["content"]
         if table.get("caption"):
             content = f"Caption: {table['caption']}\n\n{content}"
         return Chunk(
             chunk_id=str(uuid.uuid4()),
-            paper_id=paper_id,
+            arxiv_id=arxiv_id,
             paper_title=title,
             authors=authors,
             content=content,
@@ -124,7 +124,7 @@ class Chunker:
             caption=table.get("caption")
         )
 
-    def _make_references_chunk(self, references: str, paper_id: str,
+    def _make_references_chunk(self, references: str, arxiv_id: str,
                                 title: str, authors: list,
                                 page_number: Optional[int] = None) -> Chunk:
         """
@@ -134,7 +134,7 @@ class Chunker:
         """
         return Chunk(
             chunk_id=str(uuid.uuid4()),
-            paper_id=paper_id,
+            arxiv_id=arxiv_id,
             paper_title=title,
             authors=authors,
             content=references,

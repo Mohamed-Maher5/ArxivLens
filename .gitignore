@@ -11,6 +11,7 @@ data/processed/*
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 .venv/
 venv/
 *.egg-info/
@@ -23,6 +24,7 @@ build/
 # IDE
 .vscode/
 .idea/
+.codex
 
 # Logs
 logs/*.log

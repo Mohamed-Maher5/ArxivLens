@@ -15,15 +15,15 @@ class PDFParser:
         logger.info("PDFParser initialized")
 
     def parse(self, paper: Paper) -> dict:
-        logger.info(f"Parsing PDF: {paper.paper_id}")
+        logger.info(f"Parsing PDF: {paper.arxiv_id}")
         if not paper.pdf_path:
-            raise PDFParseError(f"No PDF path for paper {paper.paper_id}")
+            raise PDFParseError(f"No PDF path for paper {paper.arxiv_id}")
         if not Path(paper.pdf_path).exists():
             raise PDFParseError(f"PDF not found at {paper.pdf_path}")
         try:
             doc = fitz.open(paper.pdf_path)
             result = {
-                "paper_id": paper.paper_id,
+                "arxiv_id": paper.arxiv_id,
                 "title": paper.title,
                 "authors": paper.authors,
                 "abstract": paper.abstract,
@@ -84,7 +84,7 @@ class PDFParser:
 
             doc.close()
             logger.info(
-                f"Parsed {paper.paper_id}: "
+                f"Parsed {paper.arxiv_id}: "
                 f"{len(result['pages'])} pages, "
                 f"{len(result['images'])} images, "
                 f"{len(result['tables'])} tables, "
@@ -95,7 +95,7 @@ class PDFParser:
         except PDFParseError:
             raise
         except Exception as e:
-            raise PDFParseError(f"Failed to parse {paper.paper_id}: {e}")
+            raise PDFParseError(f"Failed to parse {paper.arxiv_id}: {e}")
 
     def _is_references_section(self, text: str, page_num: int) -> bool:
         if page_num <= 3:

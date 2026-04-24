@@ -14,18 +14,12 @@ from app.indexing.vector_store import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 
 class HybridRetriever:
 
-    def __init__(self):
-        if settings.qdrant_url:
-            self.client = QdrantClient(
-                url=settings.qdrant_url,
-                api_key=settings.qdrant_api_key
-            )
+    def __init__(self, embedder: Embedder | None = None, qdrant_client: QdrantClient | None = None):
+        if qdrant_client is not None:
+            self.client = qdrant_client
         else:
-            self.client = QdrantClient(
-                host=settings.qdrant_host,
-                port=settings.qdrant_port
-            )
-        self.embedder = Embedder()
+            self.client = QdrantClient(url=settings.qdrant_url)
+        self.embedder = embedder or Embedder()
         self.top_k = settings.top_k_retrieval
         logger.info("HybridRetriever initialized")
 

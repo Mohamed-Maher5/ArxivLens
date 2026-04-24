@@ -1,10 +1,11 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class Paper(BaseModel):
-    paper_id: str
+    arxiv_id: str
     title: str
     authors: list[str]
     abstract: str
@@ -16,7 +17,7 @@ class Paper(BaseModel):
 
 class Chunk(BaseModel):
     chunk_id: str
-    paper_id: str
+    arxiv_id: str
     paper_title: str
     authors: list[str]
     content: str
@@ -41,9 +42,3 @@ class EvalResult(BaseModel):
     answer_relevancy: Optional[float] = None
     context_precision: Optional[float] = None
     context_recall: Optional[float] = None
-
-
-class Message(BaseModel):
-    role: str
-    content: str
-    timestamp: datetime = Field(default_factory=datetime.now)

@@ -11,6 +11,7 @@ from qdrant_client.models import (
 from app.core.logger import logger
 from app.core.exceptions import QdrantConnectionError
 from app.core.settings import settings
+from app.interfaces.vector_store import VectorStore as VectorStoreInterface
 
 
 DENSE_VECTOR_NAME = "dense"
@@ -18,7 +19,7 @@ SPARSE_VECTOR_NAME = "sparse"
 VECTOR_SIZE = 1024
 
 
-def collection_name_from_paper_id(paper_id: str) -> str:
+def collection_name_from_arxiv_id(arxiv_id: str) -> str:
     """
     Derive a Qdrant-safe collection name from an ArXiv paper ID.
 
@@ -31,11 +32,11 @@ def collection_name_from_paper_id(paper_id: str) -> str:
         - Prefix with "paper_"
         - Replace dots and any other non-alphanumeric chars (except underscores) with "_"
     """
-    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", paper_id)
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", arxiv_id)
     return f"paper_{sanitized}"
 
 
-class VectorStore:
+class VectorStore(VectorStoreInterface):
     """
     Manages per-paper Qdrant collections.
 
@@ -44,25 +45,19 @@ class VectorStore:
     and reused on subsequent calls.
     """
 
-    def __init__(self, paper_id: str):
+    def __init__(self, arxiv_id: str, qdrant_client: QdrantClient | None = None):
         """
         Args:
-            paper_id: ArXiv paper ID used to derive the collection name.
+            arxiv_id: ArXiv paper ID used to derive the collection name.
         """
-        self.collection = collection_name_from_paper_id(paper_id)
+        self.collection = collection_name_from_arxiv_id(arxiv_id)
         try:
-            if settings.qdrant_url:
-                self.client = QdrantClient(
-                    url=settings.qdrant_url,
-                    api_key=settings.qdrant_api_key
-                )
-                logger.info(f"Connected to Qdrant Cloud (collection: {self.collection})")
+            if qdrant_client is not None:
+                self.client = qdrant_client
+                logger.info(f"Using injected Qdrant client (collection: {self.collection})")
             else:
-                self.client = QdrantClient(
-                    host=settings.qdrant_host,
-                    port=settings.qdrant_port
-                )
-                logger.info(f"Connected to Qdrant local (collection: {self.collection})")
+                self.client = QdrantClient(url=settings.qdrant_url)
+                logger.info(f"Connected to Qdrant at {settings.qdrant_url} (collection: {self.collection})")
 
             self._ensure_collection()
             logger.info("VectorStore initialized")
@@ -112,7 +107,7 @@ class VectorStore:
                         },
                         payload={
                             "chunk_id": chunk.chunk_id,
-                            "paper_id": chunk.paper_id,
+                            "arxiv_id": chunk.arxiv_id,
                             "paper_title": chunk.paper_title,
                             "authors": chunk.authors,
                             "content": chunk.content,
